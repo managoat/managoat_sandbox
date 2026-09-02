@@ -2,31 +2,21 @@ defmodule Managoat.Sandbox.MixProject do
   use Mix.Project
 
   @version "0.1.0"
-  @source_url "https://github.com/BinaryBourbon/fountain/tree/main/apps/managoat_sandbox"
+  @source_url "https://github.com/managoat/managoat_sandbox"
 
   def project do
     [
       app: :managoat_sandbox,
       version: @version,
-      # Umbrella-first (decisions/0037): this app builds into the umbrella's
-      # _build and deps and shares its lockfile while it lives here. The three
-      # path lines go when it graduates to a managoat/<name> repository.
-      #
-      # Deliberately no `config_path` pointing at the umbrella's config: that
-      # config is Fountain's (config/runtime.exs calls Fountain modules), and
-      # a library that reads no :fountain configuration has no use for it.
-      # Run from this directory the app boots with no config at all, which is
-      # what a consumer of the hex package gets too; every adapter setting is
-      # read through Managoat.Sandbox.Config with a default.
-      build_path: "../../_build",
-      deps_path: "../../deps",
-      lockfile: "../../mix.lock",
       elixir: "~> 1.18",
       start_permanent: Mix.env() == :prod,
       deps: deps(),
       description:
         "One sandbox behaviour over Sprites, E2B and Daytona, with the conformance suite a fourth adapter runs against.",
       package: package(),
+      source_url: @source_url,
+      docs: docs(),
+      dialyzer: dialyzer(),
       test_coverage: [
         # What this suite measures on its own (the adapters are exercised
         # further by Fountain's provisioning tests, which count toward the
@@ -48,6 +38,16 @@ defmodule Managoat.Sandbox.MixProject do
 
   defp deps do
     [
+      # Tooling for the repository, not the package: docs for hexdocs.pm (built
+      # by `mix hex.publish`), credo and dialyzer for CI. dialyxir is pinned to
+      # the commit that added OTP 28 support; 1.4.7 crashes on OTP 28 warnings.
+      {:ex_doc, "~> 0.34", only: :dev, runtime: false},
+      {:credo, "~> 1.7", only: [:dev, :test], runtime: false},
+      {:dialyxir,
+       github: "jeremyjh/dialyxir",
+       ref: "3553678f4d69281ac6db61034bcf35bcb30cfd78",
+       only: [:dev, :test],
+       runtime: false},
       # The hex release, pinned exactly. hex 0.2.0 is byte-identical to the
       # superfly/sprites-ex tag v0.2.0 this used to pin as a git dependency
       # (which is what kept the package off hex; decisions/0037). 0.2.2 changes
@@ -69,8 +69,25 @@ defmodule Managoat.Sandbox.MixProject do
   defp package do
     [
       licenses: ["Apache-2.0"],
-      links: %{"GitHub" => @source_url},
-      files: ~w(lib mix.exs README.md LICENSE)
+      links: %{"GitHub" => @source_url, "Changelog" => "#{@source_url}/blob/main/CHANGELOG.md"},
+      files: ~w(lib mix.exs README.md CHANGELOG.md LICENSE NOTICE)
+    ]
+  end
+
+  defp docs do
+    [
+      main: "readme",
+      extras: ["README.md", "CHANGELOG.md"],
+      source_ref: "v#{@version}",
+      source_url: @source_url
+    ]
+  end
+
+  defp dialyzer do
+    [
+      ignore_warnings: ".dialyzer_ignore.exs",
+      # A fixed path so CI can cache the PLT across runs.
+      plt_file: {:no_warn, "priv/plts/dialyzer.plt"}
     ]
   end
 end
