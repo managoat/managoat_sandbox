@@ -20,3 +20,11 @@ updates:
     groups:
       hex-deps:
         update-types: [minor, patch]
+    # The Sprites client is pinned to exactly 0.2.0 on purpose: 0.2.2 changes
+    # the close-frame contract, and the adapter and the conformance suite
+    # must be revisited before the requirement moves (the comment on the dep
+    # in mix.exs). A bump is a deliberate, conformance-tested change, never a
+    # weekly one; Dependabot proposed 0.2.1 within an hour of the repo
+    # existing (#1).
+    ignore:
+      - dependency-name: sprites
