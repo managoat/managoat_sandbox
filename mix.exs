@@ -56,7 +56,7 @@ defmodule Managoat.Sandbox.MixProject do
       # which the adapter and the conformance suite must be revisited for
       # before the requirement is loosened. Do not widen this to `~> 0.2`
       # without that work.
-      {:sprites, "0.2.0"},
+      {:sprites, "0.2.1"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.2"},
       # Test / dev
