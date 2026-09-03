@@ -242,6 +242,24 @@ defmodule Managoat.Sandbox.SpritesTest do
                Adapter.exec(handle(), "bash", ["-lc", "x"], [])
     end
 
+    test "a close before the exit frame is a transient error, not a clean run" do
+      # sprites 0.2.2 reports the socket closing with no exit frame as
+      # `:closed_before_exit`; 0.2.0 synthesised `{:exit, _, 0}`, which is
+      # how a failed setup script read as a successful one (#880). exec must
+      # answer with the error, and not with the output collected before it.
+      stub_client()
+
+      stub(Sprites, :spawn, fn _sprite, _cmd, _args, _opts ->
+        ref = make_ref()
+        send(self(), {:stdout, %{ref: ref}, "partial"})
+        send(self(), {:error, %{ref: ref}, :closed_before_exit})
+        {:ok, %Sprites.Command{ref: ref}}
+      end)
+
+      assert {:error, {:unavailable, :closed_before_exit}} =
+               Adapter.exec(handle(), "bash", ["-lc", "x"], [])
+    end
+
     test "timeout kills the command process and returns a transient error" do
       stub_client()
       lingering = spawn(fn -> Process.sleep(:infinity) end)

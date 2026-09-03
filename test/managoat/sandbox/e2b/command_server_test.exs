@@ -74,9 +74,13 @@ defmodule Managoat.Sandbox.E2B.CommandServerTest do
 
     refute_receive {:exit, _, _}
 
+    # A trailer-less end-stream is not a clean exit: the command's fate went
+    # with the stream, and with no exit file to recover it from, that is what
+    # the frame says. It used to be a synthesised zero.
     clean = state()
     assert {:stop, :normal, _} = CommandServer.handle_info({:chunk, end_stream()}, clean)
-    assert_receive {:exit, %{ref: ref}, 0} when ref == clean.ref
+    assert_receive {:error, %{ref: ref}, :closed_before_exit} when ref == clean.ref
+    refute_receive {:exit, _, _}
   end
 
   test "stdin calls map 404 to command_exited and pass through other results" do
@@ -141,8 +145,13 @@ defmodule Managoat.Sandbox.E2B.CommandServerTest do
                CommandServer.handle_info({monitor_ref, result}, state)
 
       case result do
-        {:ok, _} -> assert_receive {:exit, %{ref: ref}, 0} when ref == state.ref
-        {:error, reason} -> assert_receive {:error, %{ref: ref}, ^reason} when ref == state.ref
+        # The request finished without a terminal frame having been
+        # delivered: no exit event ever arrived, so the fate is unknown.
+        {:ok, _} ->
+          assert_receive {:error, %{ref: ref}, :closed_before_exit} when ref == state.ref
+
+        {:error, reason} ->
+          assert_receive {:error, %{ref: ref}, ^reason} when ref == state.ref
       end
 
       Process.exit(task_pid, :kill)

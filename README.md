@@ -34,7 +34,7 @@ Its moduledoc is normative; the short version:
 | `destroy/1` | tolerates an already-gone sandbox |
 | `list_all_names/0` | the whole account view, or `{:error, :truncated}`; never a partial view that looks whole |
 | `exec/4` | blocks until exit and never raises; a nonzero exit is `{:ok, output, code}` |
-| `spawn/4` | streams `{:stdout | :stderr | :exit | :error, %{ref: ref}, _}` frames to the owner, exactly one terminal frame, after all output |
+| `spawn/4` | streams `{:stdout | :stderr | :exit | :error, %{ref: ref}, _}` frames to the owner, exactly one terminal frame, after all output; a close with no exit frame is `{:error, _, :closed_before_exit}`, never a synthesised exit 0 |
 | `write_stdin/2` | total: an exited command yields `{:error, :command_exited}` |
 | `attach/3` | replays a detached session's output from byte zero, then tails |
 | `apply_network_policy/2` | `allow: []` is deny-all, never a silent no-op |

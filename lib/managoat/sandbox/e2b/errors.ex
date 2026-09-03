@@ -23,6 +23,10 @@ defmodule Managoat.Sandbox.E2B.Errors do
 
   def normalize({:api_error, status, body}), do: {:invalid, {:http, status, body}}
 
+  # A stream that ended with the command's fate unknown; transient for the
+  # same reason as the Sprites adapter's — see that module.
+  def normalize(:closed_before_exit), do: {:unavailable, :closed_before_exit}
+
   def normalize(:timeout), do: {:unavailable, :timeout}
   def normalize(%Req.TransportError{} = e), do: {:unavailable, e}
   def normalize(%Mint.TransportError{} = e), do: {:unavailable, e}

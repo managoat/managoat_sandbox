@@ -13,9 +13,12 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
     * `data.stdout` / `data.stderr` (base64) → `{:stdout | :stderr, %{ref: ref}, bin}`
     * `end.exitCode` → `{:exit, %{ref: ref}, code}`
     * EndStream (flag 2) with an error → `{:error, %{ref: ref}, reason}`
-    * EndStream without a preceding end event → `{:exit, %{ref: ref}, 0}` —
-      the server finished the stream deliberately; per the contract a close
-      without an exit frame reads as success
+    * EndStream without a preceding end event → `{:error, %{ref: ref},
+      :closed_before_exit}` — the stream ended with the command's fate
+      unknown, and the contract forbids fabricating a zero for it. In
+      `:attach` mode the shim's exit file is the one authority that outlives
+      the stream, so a readable one still yields the `{:exit, _, code}` it
+      records
     * transport failure → `{:error, %{ref: ref}, reason}` — the process may
       still be running sandbox-side; reattach exists for exactly this
 
@@ -158,7 +161,7 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
 
     state =
       case result do
-        {:ok, _resp} -> finish(state, {:exit, 0})
+        {:ok, _resp} -> finish(state, :closed_before_exit)
         {:error, reason} -> finish(state, {:error, reason})
       end
 
@@ -187,7 +190,7 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   defp handle_frame({:end_stream, trailers}, state) do
     case trailers do
       %{"error" => error} when not is_nil(error) -> finish(state, {:error, error})
-      _ -> finish(state, {:exit, 0})
+      _ -> finish(state, :closed_before_exit)
     end
   end
 
@@ -222,15 +225,28 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   # exit is a proxy — the real code comes from the shim's exit file.
   defp finish(%{exited?: true} = state, _terminal), do: state
 
+  # The stream ended with no exit event. The shim's exit file outlives the
+  # stream, so in attach mode it can still answer with the real code; with no
+  # file, or an unreadable one, the fate is unknown and the frame says so.
+  defp finish(state, :closed_before_exit) do
+    case state.exit_file && read_exit_code(state) do
+      {:ok, code} -> deliver_exit(state, code)
+      _no_authority -> finish(state, {:error, :closed_before_exit})
+    end
+  end
+
   defp finish(state, {:exit, code}) do
-    code = if state.exit_file, do: read_exit_code(state, code), else: code
-    send(state.owner, {:exit, %{ref: state.ref}, code})
-    state |> fail_waiter(:command_exited) |> Map.put(:exited?, true)
+    deliver_exit(state, if(state.exit_file, do: read_exit_code(state, code), else: code))
   end
 
   defp finish(state, {:error, reason}) do
     send(state.owner, {:error, %{ref: state.ref}, reason})
     state |> fail_waiter(reason) |> Map.put(:exited?, true)
+  end
+
+  defp deliver_exit(state, code) do
+    send(state.owner, {:exit, %{ref: state.ref}, code})
+    state |> fail_waiter(:command_exited) |> Map.put(:exited?, true)
   end
 
   # A stream that dies before the start ack means the spawn never happened —
@@ -243,15 +259,18 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   end
 
   defp read_exit_code(state, fallback) do
-    case Envd.read_file(state.sandbox_id, state.exit_file) do
-      {:ok, contents} ->
-        case Integer.parse(String.trim(contents)) do
-          {code, _} -> code
-          :error -> fallback
-        end
+    case read_exit_code(state) do
+      {:ok, code} -> code
+      :error -> fallback
+    end
+  end
 
-      {:error, _} ->
-        fallback
+  defp read_exit_code(state) do
+    with {:ok, contents} <- Envd.read_file(state.sandbox_id, state.exit_file),
+         {code, _rest} <- Integer.parse(String.trim(contents)) do
+      {:ok, code}
+    else
+      _unreadable -> :error
     end
   end
 end

@@ -1,7 +1,7 @@
 defmodule Managoat.Sandbox.MixProject do
   use Mix.Project
 
-  @version "0.1.1"
+  @version "0.2.0"
   @source_url "https://github.com/managoat/managoat_sandbox"
 
   def project do
@@ -47,15 +47,15 @@ defmodule Managoat.Sandbox.MixProject do
        ref: "3553678f4d69281ac6db61034bcf35bcb30cfd78",
        only: [:dev, :test],
        runtime: false},
-      # The hex release, pinned exactly. hex 0.2.0 is byte-identical to the
-      # superfly/sprites-ex tag v0.2.0 this used to pin as a git dependency
-      # (which is what kept the package off hex; decisions/0037). 0.2.2 changes
-      # the close-frame contract: a stream that closes without an exit frame
-      # becomes `{:error, _, :closed_before_exit}` rather than `{:exit, _, 0}`,
-      # which the adapter and the conformance suite must be revisited for
-      # before the requirement is loosened. Do not widen this to `~> 0.2`
-      # without that work.
-      {:sprites, "0.2.0"},
+      # The hex release, pinned exactly, because this SDK has already shipped
+      # a contract change in a patch release: 0.2.2 made a stream that closes
+      # without an exit frame `{:error, _, :closed_before_exit}` where 0.2.0
+      # synthesised `{:exit, _, 0}`. `Managoat.Sandbox` now says the same
+      # thing, so the pin is current rather than held back — but the reason
+      # the range is exact stands. Widening it to `~> 0.2` would let the next
+      # such change in silently; `sprites/protocol_contract_test.exs` guards
+      # the two frame semantics we depend on, and a bump runs it first.
+      {:sprites, "0.2.2"},
       {:req, "~> 0.5"},
       {:jason, "~> 1.2"},
       # Test / dev

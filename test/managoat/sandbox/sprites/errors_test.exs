@@ -24,6 +24,11 @@ defmodule Managoat.Sandbox.Sprites.ErrorsTest do
     assert {:unavailable, {:http, 502, %{}}} = Errors.normalize({:api_error, 502, %{}})
     assert {:unavailable, :timeout} = Errors.normalize(:timeout)
 
+    # Named rather than left to the escape hatch, because the classification
+    # is the point: `Retry.transient?/1` retries a wake on it.
+    assert {:unavailable, :closed_before_exit} = Errors.normalize(:closed_before_exit)
+    assert Managoat.Sandbox.Retry.transient?(Errors.normalize(:closed_before_exit))
+
     transport = %Req.TransportError{reason: :nxdomain}
     assert {:unavailable, ^transport} = Errors.normalize(transport)
 
