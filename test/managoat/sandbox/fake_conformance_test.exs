@@ -32,6 +32,37 @@ defmodule Managoat.Sandbox.FakeConformanceTest do
              Managoat.Sandbox.Fake.policy("policy-check")
   end
 
+  test "exec answers a dropped transport the same way the stream frame does" do
+    {:ok, handle} = Managoat.Sandbox.Fake.create("drop-check", [])
+
+    # Not `{:ok, "partial", 0}`: bytes collected before the transport went
+    # away are not a result, and the exit code was never measured.
+    assert {:error, {:unavailable, :closed_before_exit}} =
+             Managoat.Sandbox.Fake.exec(handle, "emit", ["out:partial", "drop"], [])
+  end
+
+  test "attach replays the error verdict of a session that was dropped" do
+    {:ok, handle} = Managoat.Sandbox.Fake.create("drop-attach", [])
+
+    assert {:ok, command} =
+             Managoat.Sandbox.Fake.spawn(handle, "emit", ["out:partial", "drop"],
+               owner: self(),
+               stdin: false
+             )
+
+    ref = command.ref
+    assert_receive {:error, %{ref: ^ref}, :closed_before_exit}, 1_000
+
+    # A late attacher gets the same verdict, not the exit code nobody read.
+    [session] = elem(Managoat.Sandbox.Fake.list_sessions(handle), 1)
+    assert {:ok, replay} = Managoat.Sandbox.Fake.attach(handle, session.id, owner: self())
+    replay_ref = replay.ref
+
+    assert_receive {:stdout, %{ref: ^replay_ref}, "partial"}, 1_000
+    assert_receive {:error, %{ref: ^replay_ref}, :closed_before_exit}, 1_000
+    refute_receive {:exit, %{ref: ^replay_ref}, _}, 50
+  end
+
   test "write_file stores contents the sandbox can read back" do
     {:ok, handle} = Managoat.Sandbox.Fake.create("fs-check", [])
     :ok = Managoat.Sandbox.Fake.write_file(handle, "/home/sprite/.env", "A=1\n", mode: 0o600)

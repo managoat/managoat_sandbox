@@ -38,14 +38,15 @@ defmodule Managoat.Sandbox.ConformanceCase do
     * `exec_fail` — `{cmd, args, nonzero_exit_code}`
     * `spawn_ok` — emits some stdout then exits 0
     * `spawn_drop` — the transport closes without an exit frame (optional;
-      pins the closes-without-exit-reads-as-zero rule)
+      pins the closes-without-exit-is-an-error rule)
     * `spawn_stay` — emits stdout then stays alive until stdin EOF
       (needed for the write-totality and attach-replay tests)
 
   Semantics pinned here and nowhere else: create idempotency, the
   not-found/transient distinction, destroy tolerance, full-view listing,
   exec-never-raises with nonzero-exit-as-data, the owner-message frame
-  contract with exactly one terminal frame, stdin-write totality (#603),
+  contract with exactly one terminal frame and no synthesised exit code,
+  stdin-write totality (#603),
   attach replay-from-start, and suspend/resume totality.
   """
 
@@ -212,7 +213,7 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
         end
 
         if fixtures[:spawn_drop] do
-          test "a stream that closes without an exit frame surfaces as exit 0" do
+          test "a stream that closes without an exit frame surfaces as an error" do
             {cmd, args} = @fixtures.spawn_drop
             handle = created_handle()
 
@@ -220,7 +221,12 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
             ref = command.ref
 
             assert_receive {:stdout, %{ref: ^ref}, _}, 1_000
-            assert_receive {:exit, %{ref: ^ref}, 0}, 1_000
+            assert_receive {:error, %{ref: ^ref}, _reason}, 1_000
+
+            # The point of the rule: an unknown fate must not arrive as a
+            # clean exit. A synthesised zero is what made every failed setup
+            # script in #880 read as a successful one.
+            refute_receive {:exit, %{ref: ^ref}, _}, 50
           end
         end
 

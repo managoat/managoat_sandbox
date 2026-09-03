@@ -25,7 +25,9 @@ defmodule Managoat.Sandbox.Fake do
     * `"stay"` — keep running: echo stdin writes back as `echo:<data>`
       stdout frames, exit 0 on stdin EOF
     * `"drop"` — the transport closes without an exit frame; per the
-      contract the adapter must surface that as exit 0
+      contract the adapter surfaces `{:error, %{ref: ref},
+      :closed_before_exit}`, and `exec/4` the matching
+      `{:error, {:unavailable, :closed_before_exit}}`
 
   A script with no terminal instruction exits 0. State lives in a named
   Agent; call `reset/0` in a setup block. Sessions buffer every emitted
@@ -143,8 +145,10 @@ defmodule Managoat.Sandbox.Fake do
     with_sandbox(name, fn _ ->
       stderr_to_stdout = Keyword.get(opts, :stderr_to_stdout, false)
 
+      instructions = script(args)
+
       {out, code} =
-        Enum.reduce(script(args), {[], nil}, fn
+        Enum.reduce(instructions, {[], nil}, fn
           {:stdout, data}, {acc, code} -> {[acc | data], code}
           {:stderr, data}, {acc, code} when stderr_to_stdout -> {[acc | data], code}
           {:stderr, _data}, acc_code -> acc_code
@@ -152,7 +156,14 @@ defmodule Managoat.Sandbox.Fake do
           _other, acc_code -> acc_code
         end)
 
-      {:ok, IO.iodata_to_binary(out), code || 0}
+      # `drop` is a transport that closed with the command's fate unknown.
+      # Output collected before it is not a result, so it is not returned:
+      # exec answers the same way the streaming terminal frame does.
+      if :drop in instructions do
+        {:error, {:unavailable, :closed_before_exit}}
+      else
+        {:ok, IO.iodata_to_binary(out), code || 0}
+      end
     end)
   end
 
@@ -175,6 +186,7 @@ defmodule Managoat.Sandbox.Fake do
           command: Enum.join([cmd | args], " "),
           pid: pid,
           exit: nil,
+          error: nil,
           buffer: [],
           subscribers: [{owner, ref}]
         })
@@ -239,12 +251,17 @@ defmodule Managoat.Sandbox.Fake do
           send(owner, {stream, %{ref: ref}, data})
         end)
 
-        if session.exit do
-          send(owner, {:exit, %{ref: ref}, session.exit})
-        else
-          Agent.update(@registry, fn state ->
-            update_in(state, [name, :sessions, session_id, :subscribers], &[{owner, ref} | &1])
-          end)
+        cond do
+          session.exit ->
+            send(owner, {:exit, %{ref: ref}, session.exit})
+
+          session.error ->
+            send(owner, {:error, %{ref: ref}, session.error})
+
+          true ->
+            Agent.update(@registry, fn state ->
+              update_in(state, [name, :sessions, session_id, :subscribers], &[{owner, ref} | &1])
+            end)
         end
 
         {:ok,
@@ -283,7 +300,7 @@ defmodule Managoat.Sandbox.Fake do
       {:stdout, data} -> emit(name, session_id, :stdout, data)
       {:stderr, data} -> emit(name, session_id, :stderr, data)
       {:exit, code} -> finish(name, session_id, code)
-      :drop -> finish(name, session_id, 0)
+      :drop -> fail(name, session_id, :closed_before_exit)
       :stay -> stay(name, session_id)
     end)
 
@@ -324,6 +341,23 @@ defmodule Managoat.Sandbox.Fake do
 
     Enum.each(session.subscribers, fn {owner, ref} ->
       send(owner, {:exit, %{ref: ref}, code})
+    end)
+
+    exit(:normal)
+  end
+
+  # The other terminal frame: the transport went away with the command's fate
+  # unknown. The session keeps no exit code, so a later attach replays this
+  # verdict rather than a zero nobody measured.
+  defp fail(name, session_id, reason) do
+    session = Agent.get(@registry, &get_in(&1, [name, :sessions, session_id]))
+
+    Agent.update(@registry, fn state ->
+      put_in(state, [name, :sessions, session_id, :error], reason)
+    end)
+
+    Enum.each(session.subscribers, fn {owner, ref} ->
+      send(owner, {:error, %{ref: ref}, reason})
     end)
 
     exit(:normal)

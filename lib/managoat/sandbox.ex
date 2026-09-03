@@ -50,9 +50,12 @@ defmodule Managoat.Sandbox do
       is any map carrying `:ref` — consumers must match `%{ref: ref}`, never
       an adapter's struct. Exactly one terminal frame (`:exit` or `:error`)
       arrives, after all output frames. **A stream that closes without an
-      exit frame must be surfaced as `{:exit, %{ref: ref}, 0}`** — an adapter
-      that drops the connection silently makes failed commands look
-      successful.
+      exit frame is `{:error, %{ref: ref}, :closed_before_exit}`, never a
+      synthesised `{:exit, %{ref: ref}, 0}`** — the command's fate is
+      unknown, and reporting an unknown fate as success is how a failed
+      setup script reads as a clean run (#880). An adapter that can still
+      recover the real code after the close (a shim's exit file, say) sends
+      the `:exit` frame it recovered; what it must never do is fabricate one.
     * `c:write_stdin/2` is **total**: writing to a command whose process has
       already exited returns `{:error, :command_exited}`, it never exits or
       raises in the caller (the #603 contract).

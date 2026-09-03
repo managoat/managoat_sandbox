@@ -3,8 +3,9 @@ defmodule Managoat.Sandbox.Sprites.Errors do
   Normalizes `sprites-ex` error shapes into the `Managoat.Sandbox` taxonomy.
 
   The SDK surfaces HTTP failures as `{:api_error, status, body}` (plus
-  `{:not_found, body}` from the get endpoint) and transport failures as
-  whatever `Req` produced. Nothing outside the Sprites adapter should ever
+  `{:not_found, body}` from the get endpoint), a socket that closed before
+  the command's exit frame as `:closed_before_exit`, and other transport
+  failures as whatever `Req` produced. Nothing outside the Sprites adapter should ever
   see those shapes — `Managoat.Sandbox.Retry.transient?/1` and the not-found
   handling in the wake path classify on the normalized terms only.
   """
@@ -25,6 +26,12 @@ defmodule Managoat.Sandbox.Sprites.Errors do
     do: {:unavailable, {:http, status, body}}
 
   def normalize({:api_error, status, body}), do: {:invalid, {:http, status, body}}
+
+  # The socket closed with no exit frame and nothing left to drain (sprites
+  # 0.2.2). It is transient by the taxonomy's reading — the command may well
+  # have finished, we just have no word on it — so an idempotent caller under
+  # `Managoat.Sandbox.Retry` runs it again rather than failing outright.
+  def normalize(:closed_before_exit), do: {:unavailable, :closed_before_exit}
 
   def normalize(:timeout), do: {:unavailable, :timeout}
   def normalize(%Req.TransportError{} = e), do: {:unavailable, e}

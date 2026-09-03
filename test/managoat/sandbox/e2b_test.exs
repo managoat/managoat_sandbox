@@ -314,6 +314,73 @@ defmodule Managoat.Sandbox.E2BTest do
       assert {:error, :command_exited} = Adapter.write_stdin(command, "late\n")
     end
 
+    test "a stream that ends with no exit event is an error, not exit 0" do
+      # envd finished the stream without an `end` event: the process may
+      # still be running sandbox-side, and calling that a clean exit is the
+      # #880 failure mode — a failed command reported as a successful one.
+      body =
+        stream_body([
+          %{"event" => %{"start" => %{"pid" => 42}}},
+          %{"event" => %{"data" => %{"stdout" => Base.encode64("partial")}}}
+        ])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+        end
+      end)
+
+      assert {:ok, %Command{ref: ref}} =
+               Adapter.spawn(handle(), "claude-agent-acp", [], owner: self(), stdin: true)
+
+      assert_receive {:stdout, %{ref: ^ref}, "partial"}, 1_000
+      assert_receive {:error, %{ref: ^ref}, :closed_before_exit}, 1_000
+      refute_receive {:exit, %{ref: ^ref}, _}, 50
+    end
+
+    test "attach: the shim's exit file outlives the stream and still answers" do
+      # The one case where a close with no exit event is not an unknown: the
+      # replayer ended because the shim had written the real code, and that
+      # file is readable after the stream is gone.
+      body =
+        stream_body([
+          %{"event" => %{"start" => %{"pid" => 42}}},
+          %{"event" => %{"data" => %{"stdout" => Base.encode64("replayed")}}}
+        ])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+          {"GET", "/files"} -> Plug.Conn.resp(conn, 200, "17\n")
+        end
+      end)
+
+      assert {:ok, %Command{ref: ref}} = Adapter.attach(handle(), "tag-1", owner: self())
+
+      assert_receive {:stdout, %{ref: ^ref}, "replayed"}, 1_000
+      assert_receive {:exit, %{ref: ^ref}, 17}, 1_000
+      refute_receive {:error, %{ref: ^ref}, _}, 50
+    end
+
+    test "attach: an unreadable exit file leaves the fate unknown" do
+      body = stream_body([%{"event" => %{"start" => %{"pid" => 42}}}])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+          {"GET", "/files"} -> Plug.Conn.resp(conn, 404, "")
+        end
+      end)
+
+      assert {:ok, %Command{ref: ref}} = Adapter.attach(handle(), "tag-1", owner: self())
+
+      assert_receive {:error, %{ref: ^ref}, :closed_before_exit}, 1_000
+      refute_receive {:exit, %{ref: ^ref}, _}, 50
+    end
+
     test "spawn does not return :ok before envd acks the process" do
       # A stream that dies without ever sending the start event: the process
       # never existed, so spawn must surface an error — returning :ok here is
