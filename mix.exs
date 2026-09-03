@@ -1,7 +1,7 @@
 defmodule Managoat.Sandbox.MixProject do
   use Mix.Project
 
-  @version "0.1.0"
+  @version "0.1.1"
   @source_url "https://github.com/managoat/managoat_sandbox"
 
   def project do
@@ -18,11 +18,10 @@ defmodule Managoat.Sandbox.MixProject do
       docs: docs(),
       dialyzer: dialyzer(),
       test_coverage: [
-        # What this suite measures on its own (the adapters are exercised
-        # further by Fountain's provisioning tests, which count toward the
-        # umbrella's 85% merged gate, not this one). Raise it as the library's
-        # own tests grow; never lower it.
-        summary: [threshold: 65],
+        # This repository owns coverage for every shipped adapter. Provider
+        # HTTP and streaming paths run against deterministic stubs; live
+        # credentialed smoke tests remain a host-application concern.
+        summary: [threshold: 85],
         # The conformance case is macros: its bodies run at test-compile time,
         # before cover instruments anything, so it always reports 0%. It is
         # exercised by fake_conformance_test.exs (and by every adapter's

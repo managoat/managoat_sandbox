@@ -1,7 +1,108 @@
 defmodule Managoat.Sandbox.E2B.EnvdTest do
-  use ExUnit.Case, async: true
+  use ExUnit.Case, async: false
 
   alias Managoat.Sandbox.E2B.Envd
+
+  setup do
+    previous = Application.get_env(:managoat_sandbox, Managoat.Sandbox.E2B, [])
+
+    Application.put_env(
+      :managoat_sandbox,
+      Managoat.Sandbox.E2B,
+      api_key: "e2b_test_key",
+      base_url: "https://api.test",
+      user: "sprite",
+      req_options: [plug: {Req.Test, __MODULE__}, retry: false]
+    )
+
+    on_exit(fn ->
+      Application.put_env(:managoat_sandbox, Managoat.Sandbox.E2B, previous)
+    end)
+
+    :ok
+  end
+
+  describe "envd HTTP API" do
+    test "unary calls, files, and process listing use the documented wire shapes" do
+      test_pid = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, raw_body, conn} = Plug.Conn.read_body(conn)
+        send(test_pid, {:request, conn.method, conn.request_path, conn.query_string, raw_body})
+
+        case {conn.method, conn.request_path} do
+          {"POST", "/process.Process/SendInput"} ->
+            Req.Test.json(conn, %{})
+
+          {"POST", "/process.Process/CloseStdin"} ->
+            Req.Test.json(conn, %{})
+
+          {"POST", "/process.Process/List"} ->
+            Req.Test.json(conn, %{"processes" => [%{"tag" => "turn-1"}]})
+
+          {"POST", "/files"} ->
+            Plug.Conn.send_resp(conn, 204, "")
+
+          {"GET", "/files"} ->
+            Plug.Conn.send_resp(conn, 200, "contents")
+        end
+      end)
+
+      assert %Req.Request{} = Envd.req("sbx-1")
+      assert {:ok, %{}} = Envd.send_input("sbx-1", "turn-1", ["hel", "lo"])
+      assert {:ok, %{}} = Envd.close_stdin("sbx-1", "turn-1")
+      assert {:ok, [%{"tag" => "turn-1"}]} = Envd.list_processes("sbx-1")
+      assert :ok = Envd.write_file("sbx-1", "/work/file.txt", ["con", "tents"])
+      assert {:ok, "contents"} = Envd.read_file("sbx-1", "/work/file.txt")
+
+      assert_received {:request, "POST", "/process.Process/SendInput", _, input_body}
+
+      assert Jason.decode!(input_body) == %{
+               "process" => %{"tag" => "turn-1"},
+               "input" => %{"stdin" => Base.encode64("hello")}
+             }
+
+      assert_received {:request, "POST", "/process.Process/CloseStdin", _, close_body}
+      assert Jason.decode!(close_body) == %{"process" => %{"tag" => "turn-1"}}
+      assert_received {:request, "POST", "/files", upload_query, _}
+      assert upload_query =~ "username=sprite"
+      assert_received {:request, "GET", "/files", read_query, _}
+      assert read_query =~ "path=%2Fwork%2Ffile.txt"
+    end
+
+    test "list defaults missing processes to an empty list" do
+      Req.Test.stub(__MODULE__, &Req.Test.json(&1, %{}))
+      assert {:ok, []} = Envd.list_processes("sbx-1")
+    end
+
+    test "file not-found and all endpoint HTTP errors are preserved" do
+      {:ok, status} = Agent.start_link(fn -> 404 end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        code = Agent.get(status, & &1)
+        conn |> Plug.Conn.put_status(code) |> Req.Test.json(%{"error" => "failure"})
+      end)
+
+      assert {:error, :not_found} = Envd.read_file("sbx-1", "/missing")
+      Agent.update(status, fn _ -> 418 end)
+      error = {:error, {:api_error, 418, %{"error" => "failure"}}}
+      assert Envd.send_input("sbx-1", "tag", "x") == error
+      assert Envd.close_stdin("sbx-1", "tag") == error
+      assert Envd.list_processes("sbx-1") == error
+      assert Envd.write_file("sbx-1", "/file", "x") == error
+      assert Envd.read_file("sbx-1", "/file") == error
+    end
+
+    test "all endpoint transport errors are preserved" do
+      Req.Test.stub(__MODULE__, &Req.Test.transport_error(&1, :econnrefused))
+
+      assert_transport_error(Envd.send_input("sbx-1", "tag", "x"))
+      assert_transport_error(Envd.close_stdin("sbx-1", "tag"))
+      assert_transport_error(Envd.list_processes("sbx-1"))
+      assert_transport_error(Envd.write_file("sbx-1", "/file", "x"))
+      assert_transport_error(Envd.read_file("sbx-1", "/file"))
+    end
+  end
 
   describe "Connect envelope codec" do
     test "round-trips a message frame" do
@@ -59,8 +160,9 @@ defmodule Managoat.Sandbox.E2B.EnvdTest do
 
   describe "host/1" do
     test "derives the envd host from the control-plane domain" do
-      # Default base URL api.e2b.app -> 49983-{id}.e2b.app.
-      assert Envd.host("sbx123") == "https://49983-sbx123.e2b.app"
+      assert Envd.host("sbx123") == "https://49983-sbx123.test"
     end
   end
+
+  defp assert_transport_error({:error, %Req.TransportError{reason: :econnrefused}}), do: :ok
 end

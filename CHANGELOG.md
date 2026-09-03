@@ -10,6 +10,14 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.1.1] - 2026-09-03
+
+### Changed
+
+- Raised the library's own-suite coverage gate to 85% after adding deterministic
+  coverage for the E2B and Daytona adapters, HTTP clients, error taxonomies, and
+  provider-neutral facade.
+
 ## [0.1.0] - 2026-09-02
 
 ### Added
