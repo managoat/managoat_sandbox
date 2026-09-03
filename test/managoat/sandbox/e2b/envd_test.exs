@@ -130,6 +130,10 @@ defmodule Managoat.Sandbox.E2B.EnvdTest do
     test "an empty or sub-header buffer decodes to nothing" do
       assert {[], <<>>} = Envd.decode_frames(<<>>)
       assert {[], <<0, 0>>} = Envd.decode_frames(<<0, 0>>)
+
+      # A complete header is not a complete frame until its declared payload arrives.
+      incomplete_payload = <<0, 5::32-big, "abc">>
+      assert {[], ^incomplete_payload} = Envd.decode_frames(incomplete_payload)
     end
   end
 

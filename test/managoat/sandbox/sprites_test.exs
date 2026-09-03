@@ -101,6 +101,13 @@ defmodule Managoat.Sandbox.SpritesTest do
                Adapter.public_url(%Handle{provider: :sprites, name: @name})
     end
 
+    test "provider failures are normalized" do
+      stub_client()
+      stub(Sprites, :get_sprite, fn _client, @name -> {:error, {:api_error, 503, %{}}} end)
+
+      assert {:error, {:unavailable, {:http, 503, %{}}}} = Adapter.public_url(handle())
+    end
+
     test "adopts on 409 — the name already exists" do
       stub_client()
       stub(Sprites, :create, fn _client, @name, [] -> {:error, {:api_error, 409, %{}}} end)
@@ -131,6 +138,19 @@ defmodule Managoat.Sandbox.SpritesTest do
 
       stub(Sprites, :get_sprite, fn _client, @name -> {:error, :timeout} end)
       assert {:error, {:unavailable, :timeout}} = Adapter.get(handle())
+    end
+
+    test "suspended and unfamiliar provider states normalize to the stable vocabulary" do
+      stub_client()
+      {:ok, status} = Agent.start_link(fn -> "paused" end)
+
+      stub(Sprites, :get_sprite, fn _client, @name ->
+        {:ok, %{"status" => Agent.get(status, & &1)}}
+      end)
+
+      assert {:ok, %{status: :suspended}} = Adapter.get(handle())
+      Agent.update(status, fn _ -> "migrating" end)
+      assert {:ok, %{status: :unknown}} = Adapter.get(handle())
     end
   end
 
@@ -411,6 +431,35 @@ defmodule Managoat.Sandbox.SpritesTest do
     end
   end
 
+  describe "non-streaming provider failures" do
+    test "filesystem, lifecycle, session, spawn, and policy errors stay tagged" do
+      stub_client()
+      raw_error = {:api_error, 503, %{"error" => "down"}}
+      expected = {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}}
+
+      stub(Sprites, :destroy, fn _sprite -> {:error, raw_error} end)
+      assert Adapter.destroy(handle()) == expected
+
+      stub(Sprites, :filesystem, fn _sprite, "/" -> :fake_fs end)
+
+      stub(Sprites.Filesystem, :write, fn :fake_fs, _path, _data, _opts -> {:error, raw_error} end)
+
+      assert Adapter.write_file(handle(), "/tmp/file", "data", []) == expected
+
+      stub(Sprites, :spawn, fn _sprite, _cmd, _args, _opts -> {:error, raw_error} end)
+      assert Adapter.spawn(handle(), "false", [], []) == expected
+
+      stub(Sprites, :list_sessions, fn _sprite -> {:error, raw_error} end)
+      assert Adapter.list_sessions(handle()) == expected
+
+      stub(Sprites, :attach_session, fn _sprite, _id, _opts -> {:error, raw_error} end)
+      assert Adapter.attach(handle(), "missing", []) == expected
+
+      stub(Sprites, :update_network_policy, fn _sprite, _policy -> {:error, raw_error} end)
+      assert Adapter.apply_network_policy(handle(), %NetworkPolicy{allow: []}) == expected
+    end
+  end
+
   describe "checkpoints" do
     test "create drains the stream then resolves the id from the listing" do
       stub_client()
@@ -441,6 +490,18 @@ defmodule Managoat.Sandbox.SpritesTest do
                Adapter.create_checkpoint(handle(), comment: "env x")
     end
 
+    test "create failures and a failed follow-up listing remain errors" do
+      stub_client()
+      stub(Sprites, :create_checkpoint, fn _sprite, _opts -> {:error, :timeout} end)
+      assert {:error, {:unavailable, :timeout}} = Adapter.create_checkpoint(handle(), [])
+
+      stub(Sprites, :create_checkpoint, fn _sprite, _opts -> {:ok, []} end)
+      stub(Sprites, :list_checkpoints, fn _sprite -> {:error, :timeout} end)
+
+      assert {:error, {:provider, :sprites, :no_checkpoint_id}} =
+               Adapter.create_checkpoint(handle(), [])
+    end
+
     test "restore succeeds only when the stream reports no error element" do
       stub_client()
       stub(Sprites, :restore_checkpoint, fn _sprite, "v1" -> {:ok, [%{type: "info"}]} end)
@@ -455,6 +516,25 @@ defmodule Managoat.Sandbox.SpritesTest do
       end)
 
       assert {:error, {:restore_failed, "no such checkpoint"}} =
+               Adapter.restore_checkpoint(handle(), "v1")
+
+      stub(Sprites, :restore_checkpoint, fn _sprite, "v1" ->
+        {:ok, [%{type: "info", error: "restore aborted"}]}
+      end)
+
+      assert {:error, {:restore_failed, "restore aborted"}} =
+               Adapter.restore_checkpoint(handle(), "v1")
+    end
+
+    test "restore call and lazy stream failures are returned, not raised" do
+      stub_client()
+      stub(Sprites, :restore_checkpoint, fn _sprite, "v1" -> {:error, :timeout} end)
+      assert {:error, {:unavailable, :timeout}} = Adapter.restore_checkpoint(handle(), "v1")
+
+      broken = Stream.map([:item], fn _ -> raise "stream broke" end)
+      stub(Sprites, :restore_checkpoint, fn _sprite, "v1" -> {:ok, broken} end)
+
+      assert {:error, {:provider, :sprites, {:stream_raised, %RuntimeError{}}}} =
                Adapter.restore_checkpoint(handle(), "v1")
     end
   end

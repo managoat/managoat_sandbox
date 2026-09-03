@@ -72,12 +72,61 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert {:ok, %{private: "sbx-old"}} = Adapter.create(@name, [])
     end
+
+    test "accepts the alternate sandboxId spelling returned by create" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [])
+          {"POST", "/sandboxes"} -> Req.Test.json(conn, %{"sandboxId" => "sbx-new"})
+        end
+      end)
+
+      assert {:ok, %{private: "sbx-new"}} = Adapter.create(@name, [])
+    end
+
+    test "lookup and create failures are normalized" do
+      {:ok, mode} = Agent.start_link(fn -> :lookup end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {Agent.get(mode, & &1), conn.method} do
+          {:lookup, "GET"} ->
+            conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "lookup"})
+
+          {:create, "GET"} ->
+            Req.Test.json(conn, [])
+
+          {:create, "POST"} ->
+            conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "create"})
+        end
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "lookup"}}}} =
+               Adapter.create(@name, [])
+
+      Agent.update(mode, fn _ -> :create end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "create"}}}} =
+               Adapter.create(@name, [])
+    end
   end
 
   describe "get/1, suspend/1, resume/1, destroy/1" do
     test "an unclaimed name is definitively not found" do
       Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, []) end)
       assert {:error, :not_found} = Adapter.get(handle())
+      assert {:error, :not_found} = Adapter.suspend(handle())
+    end
+
+    test "lookup failures remain tagged across lifecycle and listing operations" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "teapot"})
+      end)
+
+      error = {:error, {:invalid, {:http, 418, %{"error" => "teapot"}}}}
+      assert Adapter.get(handle()) == error
+      assert Adapter.destroy(handle()) == error
+      assert Adapter.suspend(handle()) == error
+      assert Adapter.list_all_names() == error
     end
 
     test "paused normalizes to :suspended" do
@@ -135,6 +184,21 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert {:ok, %{private: "sbx1"}} = Adapter.resume(handle())
       assert_received :connected
+    end
+
+    test "resume preserves a failed reconnect as a tagged error" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} ->
+            Req.Test.json(conn, [listed("paused")])
+
+          {"POST", "/sandboxes/sbx1/connect"} ->
+            conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "transitioning"})
+        end
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "transitioning"}}}} =
+               Adapter.resume(handle())
     end
 
     test "destroying an unclaimed name is :ok without a delete call" do
@@ -209,6 +273,13 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}} =
                Adapter.write_file(handle(), "/file", "x", [])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "lookup failed"})
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "lookup failed"}}}} =
+               Adapter.write_file(handle(), "/file", "x", [])
     end
   end
 
@@ -261,6 +332,47 @@ defmodule Managoat.Sandbox.E2BTest do
       end)
 
       assert {:ok, "hello", 3} = Adapter.exec(handle(), "bash", ["-lc", "x"], [])
+
+      assert {:ok, "hellodropped", 3} =
+               Adapter.exec(handle(), "bash", ["-lc", "x"], stderr_to_stdout: true)
+    end
+
+    test "a stream error is returned instead of partial output" do
+      body =
+        stream_body([
+          %{"event" => %{"start" => %{"pid" => 42}}},
+          %{"event" => %{"data" => %{"stdout" => Base.encode64("partial")}}}
+        ])
+
+      json = Jason.encode!(%{"error" => "stream unavailable"})
+      body = binary_part(body, 0, byte_size(body) - byte_size(end_stream_frame()))
+      body = body <> <<2, byte_size(json)::32-big, json::binary>>
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+        end
+      end)
+
+      assert {:error, {:provider, :e2b, "stream unavailable"}} =
+               Adapter.exec(handle(), "bash", ["-lc", "x"], [])
+    end
+
+    test "a silent command stream is killed at the caller's timeout" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} ->
+            Req.Test.json(conn, [listed("running")])
+
+          {"POST", "/process.Process/Start"} ->
+            Process.sleep(250)
+            Plug.Conn.resp(conn, 200, "")
+        end
+      end)
+
+      assert {:error, {:unavailable, {:exec_timeout, 20}}} =
+               Adapter.exec(handle(), "sleep", ["10"], timeout: 20)
     end
 
     test "a paused sandbox is resumed before the exec reaches envd" do
@@ -427,6 +539,21 @@ defmodule Managoat.Sandbox.E2BTest do
       ["-lc", script] = request["process"]["args"]
       assert script =~ "tee -a /tmp/fountain/"
       assert script =~ "'a'\\''b'"
+    end
+
+    test "close and stop are total after a command process exits" do
+      dead = spawn(fn -> :ok end)
+      monitor = Process.monitor(dead)
+      assert_receive {:DOWN, ^monitor, :process, ^dead, _reason}
+
+      command = %Command{provider: :e2b, ref: make_ref(), private: %{pid: dead}}
+      assert :ok = Adapter.close_stdin(command)
+      assert :ok = Adapter.stop_command(command)
+
+      {:ok, live} = Agent.start_link(fn -> :ok end)
+      live_command = %Command{provider: :e2b, ref: make_ref(), private: %{pid: live}}
+      assert :ok = Adapter.stop_command(live_command)
+      refute Process.alive?(live)
     end
   end
 

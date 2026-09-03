@@ -101,6 +101,15 @@ defmodule Managoat.Sandbox.DaytonaTest do
 
       assert {:ok, %{name: @name}} = Adapter.create(@name, [])
     end
+
+    test "an ordinary provider failure is normalized without an adoption probe" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "down"})
+      end)
+
+      assert {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}} =
+               Adapter.create(@name, [])
+    end
   end
 
   describe "get/1, suspend/1, resume/1, destroy/1" do
@@ -117,6 +126,30 @@ defmodule Managoat.Sandbox.DaytonaTest do
         Req.Test.stub(__MODULE__, fn conn -> Req.Test.json(conn, sandbox_body(state)) end)
         assert {:ok, %{status: :suspended}} = Adapter.get(handle())
       end
+    end
+
+    test "running and unfamiliar provider states normalize without leaking strings" do
+      {:ok, state} = Agent.start_link(fn -> "started" end)
+
+      Req.Test.stub(
+        __MODULE__,
+        &Req.Test.json(&1, sandbox_body(Agent.get(state, fn value -> value end)))
+      )
+
+      assert {:ok, %{status: :running}} = Adapter.get(handle())
+      Agent.update(state, fn _ -> "migrating" end)
+      assert {:ok, %{status: :unknown}} = Adapter.get(handle())
+    end
+
+    test "provider lookup failures remain tagged across lifecycle operations" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "teapot"})
+      end)
+
+      error = {:error, {:invalid, {:http, 418, %{"error" => "teapot"}}}}
+      assert Adapter.get(handle()) == error
+      assert Adapter.suspend(handle()) == error
+      assert Adapter.resume(handle()) == error
     end
 
     test "suspend stops a started sandbox and no-ops on a stopped one" do
@@ -159,6 +192,21 @@ defmodule Managoat.Sandbox.DaytonaTest do
       assert_received :started
     end
 
+    test "resume treats a 409 during a lifecycle transition as retryable" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("stopping"))
+
+          {"POST", "/api/sandbox/" <> _} ->
+            conn |> Plug.Conn.put_status(409) |> Req.Test.json(%{"error" => "transitioning"})
+        end
+      end)
+
+      assert {:error, {:unavailable, {:http, 409, %{"error" => "transitioning"}}}} =
+               Adapter.resume(handle())
+    end
+
     test "destroy tolerates 404" do
       Req.Test.stub(__MODULE__, fn conn ->
         conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{})
@@ -184,6 +232,37 @@ defmodule Managoat.Sandbox.DaytonaTest do
 
       assert {:ok, names} = Adapter.list_all_names()
       assert names == MapSet.new(["a", "b"])
+    end
+
+    test "normalizes a failed listing" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "down"})
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "down"}}}} =
+               Adapter.list_all_names()
+    end
+  end
+
+  describe "write_file/4" do
+    test "uploads through the toolbox and normalizes upload failures" do
+      {:ok, status} = Agent.start_link(fn -> 204 end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"POST", "/toolbox/sbx1/files/upload-v2"} ->
+            Plug.Conn.send_resp(conn, Agent.get(status, & &1), "upload")
+        end
+      end)
+
+      assert :ok = Adapter.write_file(handle(), "/work/file", ["da", "ta"], mode: 0o600)
+      Agent.update(status, fn _ -> 418 end)
+
+      assert {:error, {:invalid, {:http, 418, "upload"}}} =
+               Adapter.write_file(handle(), "/work/file", "data", [])
     end
   end
 
@@ -236,6 +315,21 @@ defmodule Managoat.Sandbox.DaytonaTest do
       assert {:ok, "", 0} = Adapter.exec(handle(), "true", [], [])
       assert_received :started
     end
+
+    test "toolbox execution failures are normalized" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"POST", "/toolbox/sbx1/process/execute"} ->
+            conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "bad command"})
+        end
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "bad command"}}}} =
+               Adapter.exec(handle(), "false", [], [])
+    end
   end
 
   describe "spawn/4, attach/3 and list_sessions/1" do
@@ -285,6 +379,51 @@ defmodule Managoat.Sandbox.DaytonaTest do
       assert String.starts_with?(session_id, "fountain-")
     end
 
+    test "a spawn without stdin uses the smaller exit-sentinel shim" do
+      test = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"POST", "/toolbox/sbx1/process/session"} ->
+            Req.Test.json(conn, %{})
+
+          {"POST", "/toolbox/sbx1/process/session/" <> _} ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            send(test, {:plain_spawn, Jason.decode!(raw)["command"]})
+            Req.Test.json(conn, %{"commandId" => "cmd-plain"})
+        end
+      end)
+
+      assert {:ok, %Command{private: %{command_id: "cmd-plain"}}} =
+               Adapter.spawn(handle(), "printf", ["it's fine"], owner: self())
+
+      assert_received {:plain_spawn, script}
+      assert script =~ "'it'\\''s fine'"
+      assert script =~ "FOUNTAIN_CODE=$?"
+      refute script =~ "tail -c"
+    end
+
+    test "an asynchronous exec failure is normalized before a stream starts" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"POST", "/toolbox/sbx1/process/session"} ->
+            Req.Test.json(conn, %{})
+
+          {"POST", "/toolbox/sbx1/process/session/" <> _} ->
+            conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "bad command"})
+        end
+      end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "bad command"}}}} =
+               Adapter.spawn(handle(), "false", [], owner: self())
+    end
+
     test "list_sessions filters to fountain sessions; attach re-streams the newest command" do
       sessions = [
         %{"sessionId" => "someone-else", "commands" => []},
@@ -324,6 +463,67 @@ defmodule Managoat.Sandbox.DaytonaTest do
       end)
 
       assert {:error, :not_found} = Adapter.attach(handle(), "fountain-77", owner: self())
+    end
+
+    test "malformed sessions and listing failures have stable semantic results" do
+      {:ok, response} = Agent.start_link(fn -> [%{"sessionId" => "fountain-empty"}] end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"GET", "/toolbox/sbx1/process/session"} ->
+            case Agent.get(response, & &1) do
+              {:error, status} ->
+                conn
+                |> Plug.Conn.put_status(status)
+                |> Req.Test.json(%{"error" => "sessions down"})
+
+              sessions ->
+                Req.Test.json(conn, sessions)
+            end
+        end
+      end)
+
+      assert {:ok, [%{id: "fountain-empty", command: nil}]} = Adapter.list_sessions(handle())
+      assert {:error, :not_found} = Adapter.attach(handle(), "fountain-empty", owner: self())
+
+      Agent.update(response, fn _ -> {:error, 418} end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "sessions down"}}}} =
+               Adapter.list_sessions(handle())
+    end
+
+    test "attach accepts cmdId records and normalizes a failed command listing" do
+      {:ok, response} =
+        Agent.start_link(fn ->
+          [%{"sessionId" => "fountain-42", "commands" => [%{"cmdId" => "cmd-legacy"}]}]
+        end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/api/sandbox/" <> @name} ->
+            Req.Test.json(conn, sandbox_body("started"))
+
+          {"GET", "/toolbox/sbx1/process/session"} ->
+            case Agent.get(response, & &1) do
+              {:error, status} ->
+                conn |> Plug.Conn.put_status(status) |> Req.Test.json(%{"error" => "down"})
+
+              sessions ->
+                Req.Test.json(conn, sessions)
+            end
+        end
+      end)
+
+      assert {:ok, %Command{private: %{command_id: "cmd-legacy"}}} =
+               Adapter.attach(handle(), "fountain-42", owner: self())
+
+      Agent.update(response, fn _ -> {:error, 418} end)
+
+      assert {:error, {:invalid, {:http, 418, %{"error" => "down"}}}} =
+               Adapter.attach(handle(), "fountain-42", owner: self())
     end
 
     test "stop_command is total" do
@@ -374,6 +574,28 @@ defmodule Managoat.Sandbox.DaytonaTest do
       assert command =~ "fountain-1.code"
     end
 
+    test "stdin reports both command exit failures and toolbox failures" do
+      {:ok, response} = Agent.start_link(fn -> {:exit, 12} end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case Agent.get(response, & &1) do
+          {:exit, code} ->
+            Req.Test.json(conn, %{"result" => "append failed", "exitCode" => code})
+
+          {:http, status} ->
+            conn |> Plug.Conn.put_status(status) |> Req.Test.json(%{"error" => "down"})
+        end
+      end)
+
+      assert {:error, {:write_failed, {:stdin_append_exit, 12, "append failed"}}} =
+               Adapter.write_stdin(stdin_command(), "data")
+
+      Agent.update(response, fn _ -> {:http, 418} end)
+
+      assert {:error, {:write_failed, {:invalid, {:http, 418, %{"error" => "down"}}}}} =
+               Adapter.write_stdin(stdin_command(), "data")
+    end
+
     test "close_stdin kills the stdin tail — a real EOF" do
       test = self()
 
@@ -390,6 +612,14 @@ defmodule Managoat.Sandbox.DaytonaTest do
       assert_received {:close, command}
       assert command =~ "kill"
       assert command =~ "/tmp/fountain/fountain-1.tailpid"
+    end
+
+    test "close_stdin remains idempotent when the toolbox is unavailable" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "down"})
+      end)
+
+      assert :ok = Adapter.close_stdin(stdin_command())
     end
   end
 
@@ -413,6 +643,9 @@ defmodule Managoat.Sandbox.DaytonaTest do
 
   describe "capabilities" do
     test "suspend/network/attach advertised; checkpoints refused" do
+      assert Adapter.provider() == :daytona
+      assert {:error, :unsupported} = Adapter.public_url(handle())
+
       caps = Adapter.capabilities()
       assert MapSet.member?(caps, :suspend)
       assert MapSet.member?(caps, :network_policy)
