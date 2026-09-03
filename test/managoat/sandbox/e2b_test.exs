@@ -85,6 +85,19 @@ defmodule Managoat.Sandbox.E2BTest do
       assert {:ok, %{status: :suspended}} = Adapter.get(handle())
     end
 
+    test "running and unfamiliar provider states normalize without leaking strings" do
+      {:ok, state} = Agent.start_link(fn -> "running" end)
+
+      Req.Test.stub(
+        __MODULE__,
+        &Req.Test.json(&1, [listed(Agent.get(state, fn value -> value end))])
+      )
+
+      assert {:ok, %{status: :running}} = Adapter.get(handle())
+      Agent.update(state, fn _ -> "starting" end)
+      assert {:ok, %{status: :unknown}} = Adapter.get(handle())
+    end
+
     test "suspend pauses a running sandbox and no-ops on a paused one" do
       test = self()
 
@@ -150,6 +163,52 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert :ok = Adapter.destroy(handle())
       assert_received :deleted
+    end
+  end
+
+  describe "identity and files" do
+    test "provider identity and public URL capability are explicit" do
+      assert Adapter.provider() == :e2b
+      assert {:error, :unsupported} = Adapter.public_url(handle())
+    end
+
+    test "write_file resolves the sandbox and uploads multipart data" do
+      test = self()
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} ->
+            Req.Test.json(conn, [listed("running")])
+
+          {"POST", "/files"} ->
+            send(test, {:upload, conn.query_string})
+            Plug.Conn.send_resp(conn, 204, "")
+        end
+      end)
+
+      assert :ok = Adapter.write_file(handle(), "/work/file.txt", ["con", "tents"], mode: 0o600)
+      assert_received {:upload, query}
+      assert query =~ "path=%2Fwork%2Ffile.txt"
+    end
+
+    test "file operations preserve resolution and upload failures" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.method do
+          "GET" -> Req.Test.json(conn, [])
+        end
+      end)
+
+      assert {:error, :not_found} = Adapter.write_file(handle(), "/file", "x", [])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.method do
+          "GET" -> Req.Test.json(conn, [listed("running")])
+          "POST" -> conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "down"})
+        end
+      end)
+
+      assert {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}} =
+               Adapter.write_file(handle(), "/file", "x", [])
     end
   end
 
@@ -269,6 +328,106 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert {:error, _reason} =
                Adapter.spawn(handle(), "claude-agent-acp", [], owner: self(), stdin: true)
+    end
+
+    test "detachable spawn wraps shell-safe argv in the journaling shim" do
+      test = self()
+
+      body =
+        stream_body([
+          %{"event" => %{"start" => %{"pid" => 42}}},
+          %{"event" => %{"end" => %{"exitCode" => 0}}}
+        ])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} ->
+            Req.Test.json(conn, [listed("running")])
+
+          {"POST", "/process.Process/Start"} ->
+            {:ok, raw, conn} = Plug.Conn.read_body(conn)
+            send(test, {:start_request, raw})
+            Plug.Conn.resp(conn, 200, body)
+        end
+      end)
+
+      assert {:ok, %Command{}} =
+               Adapter.spawn(handle(), "bash", ["a'b"], owner: self(), detachable: true)
+
+      assert_received {:start_request, raw}
+      assert {[{:message, request}], <<>>} = Envd.decode_frames(raw)
+      assert request["process"]["cmd"] == "bash"
+      ["-lc", script] = request["process"]["args"]
+      assert script =~ "tee -a /tmp/fountain/"
+      assert script =~ "'a'\\''b'"
+    end
+  end
+
+  describe "sessions and attach" do
+    test "list_sessions filters provider processes and normalizes command lines" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} ->
+            Req.Test.json(conn, [listed("running")])
+
+          {"POST", "/process.Process/List"} ->
+            Req.Test.json(conn, %{
+              "processes" => [
+                %{"tag" => "other", "config" => %{"cmd" => "ignored", "args" => []}},
+                %{
+                  "tag" => "fountain-42",
+                  "config" => %{"cmd" => "bash", "args" => ["-lc", "true"]}
+                },
+                %{"tag" => "fountain-43"}
+              ]
+            })
+        end
+      end)
+
+      assert {:ok, sessions} = Adapter.list_sessions(handle())
+
+      assert Enum.map(sessions, &{&1.id, &1.command}) == [
+               {"fountain-42", "bash -lc true"},
+               {"fountain-43", nil}
+             ]
+    end
+
+    test "attach replays through a tagged command and reads the original exit sentinel" do
+      body =
+        stream_body([
+          %{"event" => %{"start" => %{"pid" => 42}}},
+          %{"event" => %{"data" => %{"stdout" => Base.encode64("replayed")}}},
+          %{"event" => %{"end" => %{"exitCode" => 0}}}
+        ])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+          {"GET", "/files"} -> Plug.Conn.send_resp(conn, 200, "7\n")
+        end
+      end)
+
+      assert {:ok, %Command{private: %{tag: "fountain-42"}} = command} =
+               Adapter.attach(handle(), "fountain-42", owner: self())
+
+      assert_receive {:stdout, %{ref: ref}, "replayed"} when ref == command.ref
+      assert_receive {:exit, %{ref: ref}, 7} when ref == command.ref
+    end
+
+    test "session-list API failures are normalized" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case conn.request_path do
+          "/v2/sandboxes" ->
+            Req.Test.json(conn, [listed("running")])
+
+          "/process.Process/List" ->
+            conn |> Plug.Conn.put_status(503) |> Req.Test.json(%{"error" => "down"})
+        end
+      end)
+
+      assert {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}} =
+               Adapter.list_sessions(handle())
     end
   end
 
