@@ -68,4 +68,35 @@ defmodule Managoat.Sandbox.FakeConformanceTest do
     :ok = Managoat.Sandbox.Fake.write_file(handle, "/home/sprite/.env", "A=1\n", mode: 0o600)
     assert Managoat.Sandbox.Fake.file("fs-check", "/home/sprite/.env") == "A=1\n"
   end
+
+  test "missing sandboxes and sessions are definitively not found" do
+    missing = Managoat.Sandbox.Fake.build_handle("missing")
+    assert {:error, :not_found} = Managoat.Sandbox.Fake.public_url(missing)
+    assert {:error, :not_found} = Managoat.Sandbox.Fake.suspend(missing)
+
+    {:ok, handle} = Managoat.Sandbox.Fake.create("session-check", [])
+    assert {:error, :not_found} = Managoat.Sandbox.Fake.attach(handle, "missing", [])
+  end
+
+  test "exec drops stderr unless the caller asks to merge it" do
+    {:ok, handle} = Managoat.Sandbox.Fake.create("exec-stderr", [])
+
+    assert {:ok, "out", 0} =
+             Managoat.Sandbox.Fake.exec(handle, "emit", ["out:out", "err:noise"], [])
+  end
+
+  test "a script without a terminal instruction auto-exits and replays stderr to attachers" do
+    {:ok, handle} = Managoat.Sandbox.Fake.create("auto-exit", [])
+    assert {:ok, command} = Managoat.Sandbox.Fake.spawn(handle, "emit", ["err:warning"], [])
+
+    ref = command.ref
+    assert_receive {:stderr, %{ref: ^ref}, "warning"}, 1_000
+    assert_receive {:exit, %{ref: ^ref}, 0}, 1_000
+
+    [session] = elem(Managoat.Sandbox.Fake.list_sessions(handle), 1)
+    assert {:ok, replay} = Managoat.Sandbox.Fake.attach(handle, session.id, owner: self())
+    replay_ref = replay.ref
+    assert_receive {:stderr, %{ref: ^replay_ref}, "warning"}, 1_000
+    assert_receive {:exit, %{ref: ^replay_ref}, 0}, 1_000
+  end
 end

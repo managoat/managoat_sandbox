@@ -81,6 +81,102 @@ defmodule Managoat.Sandbox.Daytona.LogStreamTest do
       assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 3_000
       refute_received {:stdout, _, _}
     end
+
+    test "accepts legacy per-stream JSON and a command-record exit code" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/toolbox/sbx1/process/session/fountain-1/command/c1/logs"} ->
+            Req.Test.json(conn, %{"stdout" => "out", "stderr" => "err"})
+
+          {"GET", "/toolbox/sbx1/process/session/fountain-1/command/c1"} ->
+            Req.Test.json(conn, %{"id" => "c1", "exitCode" => 9})
+        end
+      end)
+
+      ref = make_ref()
+
+      {:ok, pid} =
+        LogStream.start(
+          toolbox_url: "https://proxy.test/toolbox/sbx1",
+          session_id: "fountain-1",
+          command_id: "c1",
+          ref: ref,
+          owner: self()
+        )
+
+      monitor = Process.monitor(pid)
+      assert_receive {:stdout, %{ref: ^ref}, "out"}, 1_000
+      assert_receive {:stderr, %{ref: ^ref}, "err"}, 1_000
+      assert_receive {:exit, %{ref: ^ref}, 9}, 1_000
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 1_000
+    end
+
+    test "a missing command falls back to the sentinel and ignores corrupt contents" do
+      {:ok, sentinel} = Agent.start_link(fn -> {:http_error, 418} end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        case {conn.method, conn.request_path} do
+          {"GET", "/toolbox/sbx1/process/session/fountain-1/command/c1/logs"} ->
+            Plug.Conn.resp(conn, 200, "")
+
+          {"GET", "/toolbox/sbx1/process/session/fountain-1/command/c1"} ->
+            Plug.Conn.send_resp(conn, 404, "gone")
+
+          {"POST", "/toolbox/sbx1/process/execute"} ->
+            case Agent.get(sentinel, & &1) do
+              {:http_error, status} ->
+                conn |> Plug.Conn.put_status(status) |> Req.Test.json(%{"error" => "transient"})
+
+              contents ->
+                Req.Test.json(conn, %{"result" => contents, "exitCode" => 0})
+            end
+        end
+      end)
+
+      ref = make_ref()
+
+      {:ok, pid} =
+        LogStream.start(
+          toolbox_url: "https://proxy.test/toolbox/sbx1",
+          session_id: "fountain-1",
+          command_id: "c1",
+          exit_file: "/tmp/fountain/fountain-1.code",
+          ref: ref,
+          owner: self()
+        )
+
+      refute_receive {:exit, %{ref: ^ref}, _}, 100
+      Agent.update(sentinel, fn _ -> "not-an-exit-code" end)
+      send(pid, :poll)
+      refute_receive {:exit, %{ref: ^ref}, _}, 100
+      Agent.update(sentinel, fn _ -> "23\n" end)
+      send(pid, :poll)
+      assert_receive {:exit, %{ref: ^ref}, 23}, 1_000
+    end
+
+    test "bounds consecutive journal failures and reports the stream unreachable" do
+      Req.Test.stub(__MODULE__, fn conn ->
+        conn |> Plug.Conn.put_status(418) |> Req.Test.json(%{"error" => "unreachable"})
+      end)
+
+      ref = make_ref()
+
+      {:ok, pid} =
+        LogStream.start(
+          toolbox_url: "https://proxy.test/toolbox/sbx1",
+          session_id: "fountain-1",
+          command_id: "c1",
+          ref: ref,
+          owner: self()
+        )
+
+      monitor = Process.monitor(pid)
+      Enum.each(1..35, fn _ -> send(pid, :poll) end)
+
+      assert_receive {:error, %{ref: ^ref}, :log_stream_unreachable}, 2_000
+      assert_receive {:DOWN, ^monitor, :process, ^pid, :normal}, 1_000
+      refute_received {:exit, %{ref: ^ref}, _}
+    end
   end
 
   describe "demux/2 — the 3-byte channel markers" do

@@ -10,6 +10,15 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-09-03
+
+### Changed
+
+- Raised the library coverage gate from 85% to 97% after adding deterministic
+  behavioral coverage for adapter lifecycle failures, command-stream edge
+  cases, session attachment, provider error normalization, and the shipped
+  in-memory Fake adapter.
+
 ## [0.2.0] - 2026-09-03
 
 ### Changed

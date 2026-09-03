@@ -1,7 +1,7 @@
 defmodule Managoat.Sandbox.MixProject do
   use Mix.Project
 
-  @version "0.2.0"
+  @version "0.2.1"
   @source_url "https://github.com/managoat/managoat_sandbox"
 
   def project do
@@ -21,7 +21,7 @@ defmodule Managoat.Sandbox.MixProject do
         # This repository owns coverage for every shipped adapter. Provider
         # HTTP and streaming paths run against deterministic stubs; live
         # credentialed smoke tests remain a host-application concern.
-        summary: [threshold: 85],
+        summary: [threshold: 97],
         # The conformance case is macros: its bodies run at test-compile time,
         # before cover instruments anything, so it always reports 0%. It is
         # exercised by fake_conformance_test.exs (and by every adapter's
