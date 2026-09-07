@@ -97,7 +97,17 @@ defmodule Managoat.Sandbox.ConformanceCase.Identity do
           caps = @adapter.capabilities()
           assert %MapSet{} = caps
 
-          known = MapSet.new([:suspend, :network_policy, :checkpoint, :attach, :tty, :public_url])
+          known =
+            MapSet.new([
+              :suspend,
+              :network_policy,
+              :checkpoint,
+              :attach,
+              :tty,
+              :public_url,
+              :terminate_session
+            ])
+
           assert MapSet.subset?(caps, known)
         end
 
@@ -320,6 +330,25 @@ defmodule Managoat.Sandbox.ConformanceCase.Governance do
             ref = Process.monitor(attacher)
             assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
           end
+        end
+      end
+
+      if MapSet.member?(adapter.capabilities(), :terminate_session) do
+        test "remote termination stops a detached session and preserves its sandbox" do
+          handle = created_handle()
+          on_exit(fn -> @adapter.destroy(handle) end)
+          {cmd, args} = @fixtures.spawn_stay
+          {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+          ref = command.ref
+          assert_receive {:stdout, %{ref: ^ref}, _ready}, 1_000
+          {:ok, [session]} = @adapter.list_sessions(handle)
+          assert :ok = @adapter.stop_command(command)
+          assert :ok = @adapter.terminate_session(handle, session.id, timeout_ms: 1_000)
+          assert :ok = @adapter.terminate_session(handle, session.id, timeout_ms: 1_000)
+          assert {:ok, %{status: _}} = @adapter.get(handle)
+          {exec, arguments, expected} = @fixtures.exec_ok
+          assert {:ok, output, 0} = @adapter.exec(handle, exec, arguments, [])
+          assert output =~ expected
         end
       end
 

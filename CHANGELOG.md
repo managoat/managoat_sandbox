@@ -10,6 +10,16 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-09-07
+
+- Add optional `terminate_session/3` with an explicit capability. Sprites requires
+  bounded provider kill acknowledgments; disconnects and incomplete responses do
+  not establish termination. E2B and Daytona return `:not_supported` until they
+  implement the capability. Callers retain session ownership across uncertainty.
+- Correct the reference fake: `stop_command/1` detaches only the local subscriber.
+  Consumers that relied on it killing the remote process must call
+  `terminate_session/3`; detached command handles reject stdin writes.
+
 ## [0.2.1] - 2026-09-03
 
 ### Changed

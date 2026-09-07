@@ -37,6 +37,7 @@ Its moduledoc is normative; the short version:
 | `spawn/4` | streams `{:stdout | :stderr | :exit | :error, %{ref: ref}, _}` frames to the owner, exactly one terminal frame, after all output; a close with no exit frame is `{:error, _, :closed_before_exit}`, never a synthesised exit 0 |
 | `write_stdin/2` | total: an exited command yields `{:error, :command_exited}` |
 | `attach/3` | replays a detached session's output from byte zero, then tails |
+| `terminate_session/3` | optional remote stop; success requires provider-confirmed termination or absence, never just local disconnect or HTTP acceptance |
 | `apply_network_policy/2` | `allow: []` is deny-all, never a silent no-op |
 
 Errors are the closed taxonomy `:not_found`, `:truncated`, `:not_supported`,
@@ -49,8 +50,22 @@ the idempotent calls (never wrap a non-idempotent one in it).
 
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
-`:tty`, `:public_url`. A capability is a promise about the answer, and the
-conformance suite checks the promise.
+`:tty`, `:public_url`, `:terminate_session`. A capability is a promise about the
+answer, and the conformance suite checks the promise.
+
+`terminate_session(handle, session_id, timeout_ms: 10_000)` is implemented for
+Sprites and the reference fake. Other adapters return `{:error, :not_supported}`;
+they do not destroy the sandbox as a fallback. The grace interval is 1–30,000 ms,
+with up to five further seconds for transport. Sprites escalates SIGTERM to
+SIGKILL and requires affirmative termination plus the final completion frame.
+An error, malformed/truncated stream or lost response remains uncertain. There
+is no automatic retry or redirect, and output is bounded to 16 KiB.
+
+The host must authorize the exact sandbox incarnation and session, persist its
+intent, and prevent session reuse while termination is uncertain. A confirmed
+stop provides no passing-test evidence, original exit result, or billed-cost
+claim. `stop_command/1` only detaches the local transport. Turn deadlines and
+durable recovery belong to the host; this operation supplies the remote stop.
 
 ## The adapters
 
@@ -151,9 +166,8 @@ the design is
 Fountain's self-hosted runner adapter implements this behaviour from outside
 the package, which is what the behaviour is for.
 
-Not yet on hex: the Sprites client is a git dependency
-(`superfly/sprites-ex`), and hex refuses those. Graduation needs a hex release
-of that client or a vendored one.
+Published on hex; the Sprites SDK is pinned exactly to its released version in
+`mix.exs`.
 
 ## Licence
 
