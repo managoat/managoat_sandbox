@@ -89,13 +89,21 @@ defmodule Managoat.Sandbox do
     * `:network_policy` — deny-capable egress policy
     * `:checkpoint` — checkpoint create/restore currently usable
     * `:attach` — detachable sessions with replay-from-start
+    * `:terminate_session` — provider-confirmed remote process termination
     * `:tty` — PTY allocation on spawn
     * `:public_url` — the platform gives each sandbox an HTTP endpoint, and
       the adapter can report it (and make it reachable without a platform
       credential). Agents serve from inside the sandbox and need to be able to
       tell a human where to look
   """
-  @type capability :: :suspend | :network_policy | :checkpoint | :attach | :tty | :public_url
+  @type capability ::
+          :suspend
+          | :network_policy
+          | :checkpoint
+          | :attach
+          | :tty
+          | :public_url
+          | :terminate_session
 
   @typedoc """
   The provider-neutral error taxonomy.
@@ -195,6 +203,23 @@ defmodule Managoat.Sandbox do
   @doc "Re-join a detached session; replays buffered output from the start."
   @callback attach(Handle.t(), session_id :: String.t(), keyword()) ::
               {:ok, Command.t()} | {:error, error()}
+
+  @doc """
+  Terminate the remote session, without destroying its sandbox or other sessions.
+
+  `:ok` requires provider confirmation of termination or definitive absence.
+  A local disconnect, a sent signal or HTTP acceptance alone is insufficient.
+  It supplies no successful-command evidence. A transport failure leaves the
+  operation uncertain; callers must keep the original ownership fence and must
+  not replay it against a replacement session or reused sandbox name.
+
+  Callers own authorization and must bind the session to the intended sandbox
+  incarnation. Options: `:timeout_ms` (1–30,000; default 10,000), the graceful
+  stop allowance. Adapters may use up to five further seconds for transport.
+  Unsupported adapters must not fall back to destroying the whole sandbox.
+  """
+  @callback terminate_session(Handle.t(), String.t(), keyword()) :: :ok | {:error, error()}
+  @optional_callbacks terminate_session: 3
 
   @doc "Apply a deny-capable egress policy. `allow: []` must deny all egress."
   @callback apply_network_policy(Handle.t(), NetworkPolicy.t()) :: :ok | {:error, error()}
@@ -353,6 +378,33 @@ defmodule Managoat.Sandbox do
   @spec attach(Handle.t(), String.t(), keyword()) :: {:ok, Command.t()} | {:error, error()}
   def attach(%Handle{} = handle, session_id, opts \\ []) do
     adapter(handle).attach(handle, session_id, opts)
+  end
+
+  @doc "Provider-confirmed remote termination; see `c:terminate_session/3`."
+  @spec terminate_session(Handle.t(), String.t(), keyword()) :: :ok | {:error, error()}
+  def terminate_session(%Handle{} = handle, session_id, opts \\ []) do
+    mod = adapter(handle)
+
+    cond do
+      not valid_termination?(session_id, opts) ->
+        {:error, {:invalid, :termination_request}}
+
+      not supports?(handle, :terminate_session) or
+          not function_exported?(mod, :terminate_session, 3) ->
+        {:error, :not_supported}
+
+      true ->
+        mod.terminate_session(handle, session_id, opts)
+    end
+  end
+
+  @doc false
+  def valid_termination?(session_id, opts) do
+    is_binary(session_id) and byte_size(session_id) in 1..256 and
+      Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, session_id) and
+      Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :timeout_ms)) and
+      length(opts) <= 1 and is_integer(Keyword.get(opts, :timeout_ms, 10_000)) and
+      Keyword.get(opts, :timeout_ms, 10_000) in 1..30_000
   end
 
   @doc "Apply an egress policy."

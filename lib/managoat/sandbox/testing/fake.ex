@@ -65,7 +65,8 @@ defmodule Managoat.Sandbox.Fake do
   def provider, do: :fake
 
   @impl true
-  def capabilities, do: MapSet.new([:suspend, :network_policy, :attach, :public_url])
+  def capabilities,
+    do: MapSet.new([:suspend, :network_policy, :attach, :public_url, :terminate_session])
 
   @impl true
   def build_handle(name) when is_binary(name), do: %Handle{provider: :fake, name: name}
@@ -200,8 +201,8 @@ defmodule Managoat.Sandbox.Fake do
   end
 
   @impl true
-  def write_stdin(%Command{private: %{pid: pid}}, data) do
-    if Process.alive?(pid) do
+  def write_stdin(%Command{private: %{pid: pid}} = command, data) do
+    if Process.alive?(pid) and connected?(command) do
       send(pid, {:stdin, IO.iodata_to_binary(data)})
       :ok
     else
@@ -210,15 +211,75 @@ defmodule Managoat.Sandbox.Fake do
   end
 
   @impl true
-  def close_stdin(%Command{private: %{pid: pid}}) do
-    send(pid, :eof)
+  def close_stdin(%Command{private: %{pid: pid}} = command) do
+    if connected?(command) do
+      send(pid, :eof)
+      :ok
+    else
+      {:error, :command_exited}
+    end
+  end
+
+  defp connected?(%Command{ref: ref, private: %{name: name, session: id}}) do
+    Agent.get(@registry, fn state ->
+      Enum.any?(get_in(state, [name, :sessions, id, :subscribers]) || [], fn {_owner,
+                                                                              subscriber_ref} ->
+        subscriber_ref == ref
+      end)
+    end)
+  end
+
+  @impl true
+  def stop_command(%Command{ref: ref, private: %{name: name, session: id}}) do
+    Agent.update(@registry, fn state ->
+      if get_in(state, [name, :sessions, id]) do
+        update_in(state, [name, :sessions, id, :subscribers], fn subscribers ->
+          Enum.reject(subscribers, fn {_owner, subscriber_ref} -> subscriber_ref == ref end)
+        end)
+      else
+        state
+      end
+    end)
+
     :ok
   end
 
   @impl true
-  def stop_command(%Command{private: %{pid: pid}}) do
-    Process.exit(pid, :kill)
-    :ok
+  def terminate_session(%Handle{name: name}, session_id, opts) do
+    if Managoat.Sandbox.valid_termination?(session_id, opts) do
+      terminate_remote(name, session_id)
+    else
+      {:error, {:invalid, :termination_request}}
+    end
+  end
+
+  defp terminate_remote(name, session_id) do
+    case Agent.get(@registry, &get_in(&1, [name, :sessions, session_id])) do
+      nil ->
+        :ok
+
+      %{pid: pid} ->
+        monitor = Process.monitor(pid)
+        Process.exit(pid, :kill)
+
+        receive do
+          {:DOWN, ^monitor, :process, ^pid, _reason} -> :ok
+        end
+
+        subscribers =
+          Agent.get_and_update(@registry, fn state ->
+            case get_in(state, [name, :sessions, session_id]) do
+              %{exit: nil, error: nil, subscribers: subscribers} ->
+                {subscribers, put_in(state, [name, :sessions, session_id, :exit], 137)}
+
+              _ ->
+                {[], state}
+            end
+          end)
+
+        Enum.each(subscribers, fn {owner, ref} -> send(owner, {:exit, %{ref: ref}, 137}) end)
+        :ok
+    end
   end
 
   # ── sessions ───────────────────────────────────────────────────────────────

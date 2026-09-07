@@ -37,7 +37,8 @@ defmodule Managoat.Sandbox.Sprites do
   @impl true
   def capabilities do
     MapSet.new(
-      [:suspend, :network_policy, :attach, :tty, :public_url] ++ checkpoint_capabilities()
+      [:suspend, :network_policy, :attach, :tty, :public_url, :terminate_session] ++
+        checkpoint_capabilities()
     )
   end
 
@@ -267,6 +268,19 @@ defmodule Managoat.Sandbox.Sprites do
     case Sprites.attach_session(sprite_of(handle), session_id, opts) do
       {:ok, %Sprites.Command{} = command} -> {:ok, wrap_command(command)}
       {:error, reason} -> {:error, Errors.normalize(reason)}
+    end
+  end
+
+  @impl true
+  def terminate_session(%Handle{} = handle, session_id, opts) do
+    if Managoat.Sandbox.valid_termination?(session_id, opts) do
+      Managoat.Sandbox.Sprites.Termination.terminate(
+        handle.name,
+        session_id,
+        Keyword.get(opts, :timeout_ms, 10_000)
+      )
+    else
+      {:error, {:invalid, :termination_request}}
     end
   end
 

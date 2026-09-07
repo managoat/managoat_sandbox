@@ -1,0 +1,25 @@
+{
+  "absent_after_cleanup": true,
+  "alive_after_detach": true,
+  "finished_at": "2026-09-07T21:07:27.311301Z",
+  "isolated_vm": true,
+  "neighbor_exit": 7,
+  "phase": "passed",
+  "present_before": true,
+  "session": "19",
+  "started_at": "2026-09-07T21:07:11.593552Z",
+  "termination": ":ok",
+  "victim_absent_after_kill": true,
+  "worker": "rl-library-kill-20260907-2115",
+  "scope": "Actual adapter in an isolated Elixir VM using existing production pod credentials; one disposable worker, no running Fountain VM changes.",
+  "limitations": [
+    "No Fountain deadline enforcement implemented by this library release.",
+    "Confirmed termination is not original command exit or billed-cost evidence.",
+    "E2B and Daytona do not implement this capability."
+  ],
+  "source_sha256": {
+    "lib/managoat/sandbox.ex": "47a39a89e73ad037d94ac6098a1ea5ae45a841fb582f097d60f0eb8687031b4e",
+    "lib/managoat/sandbox/sprites.ex": "48d08b7cd79e62e5c7cfb539d4290cfbc9e8dacb50ea5de2380c07f47675ed30",
+    "lib/managoat/sandbox/sprites/termination.ex": "5b593cbaba57db7c32d584e0a3edfcbf561d288b1b37e7a043d3b41203249a53"
+  }
+}
