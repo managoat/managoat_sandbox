@@ -10,6 +10,14 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-09-08
+
+- Add optional `create_checkpoint_once/2` for Sprites. One POST and one
+  confirmation GET share a deadline and 64 KiB response budget, without retry
+  or redirect. Success requires a complete progress stream and exactly one
+  saved checkpoint matching the host's operation ID; older checkpoints cannot
+  substitute. The operator's checkpoint-disable setting remains effective.
+
 ## [0.4.1] - 2026-09-08
 
 - Add optional `destroy_once/2` for Sprites: one DELETE and at most one GET to

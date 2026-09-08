@@ -88,6 +88,7 @@ defmodule Managoat.Sandbox do
       where absent
     * `:network_policy` — deny-capable egress policy
     * `:checkpoint` — checkpoint create/restore currently usable
+    * `:create_checkpoint_once` — bounded checkpoint creation with a host operation ID
     * `:attach` — detachable sessions with replay-from-start
     * `:terminate_session` — provider-confirmed remote process termination
     * `:tty` — PTY allocation on spawn
@@ -105,6 +106,7 @@ defmodule Managoat.Sandbox do
           :suspend
           | :network_policy
           | :checkpoint
+          | :create_checkpoint_once
           | :attach
           | :tty
           | :public_url
@@ -255,6 +257,10 @@ defmodule Managoat.Sandbox do
   @doc "Checkpoint the sandbox filesystem; returns the durable checkpoint id."
   @callback create_checkpoint(Handle.t(), keyword()) ::
               {:ok, checkpoint_id :: String.t()} | {:error, error()}
+
+  @doc "Optional bounded checkpoint creation, correlated to a durable host operation ID."
+  @callback create_checkpoint_once(Handle.t(), keyword()) :: {:ok, String.t()} | {:error, error()}
+  @optional_callbacks create_checkpoint_once: 2
 
   @doc "Restore a checkpoint. A reported-failed restore is an error, not `:ok`."
   @callback restore_checkpoint(Handle.t(), checkpoint_id :: String.t()) ::
@@ -471,6 +477,23 @@ defmodule Managoat.Sandbox do
   @spec create_checkpoint(Handle.t(), keyword()) :: {:ok, String.t()} | {:error, error()}
   def create_checkpoint(%Handle{} = handle, opts \\ []) do
     adapter(handle).create_checkpoint(handle, opts)
+  end
+
+  @doc """
+  Create a checkpoint once, requiring `operation_id: id` from durable host intent.
+  Sprites requires a complete progress stream and exactly one matching saved
+  checkpoint. POST and GET share a deadline and byte budget, with retries and
+  redirects disabled. Unsupported or disabled adapters never use the ordinary
+  checkpoint path. The host must not reuse an operation ID or replay uncertainty.
+  """
+  @spec create_checkpoint_once(Handle.t(), keyword()) :: {:ok, String.t()} | {:error, error()}
+  def create_checkpoint_once(%Handle{} = handle, opts) do
+    mod = adapter(handle)
+    Code.ensure_loaded(mod)
+
+    if function_exported?(mod, :create_checkpoint_once, 2),
+      do: mod.create_checkpoint_once(handle, opts),
+      else: {:error, :not_supported}
   end
 
   @doc "Restore a checkpoint into the sandbox."
