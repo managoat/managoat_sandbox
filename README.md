@@ -30,6 +30,7 @@ Its moduledoc is normative; the short version:
 | Semantic | Rule |
 |---|---|
 | `create/2` | name-keyed and idempotent: a name that exists is adopted, not duplicated |
+| `create_new/2` | optional fresh creation; conflicts are refused, and success carries `Handle.instance_id` from provider control metadata |
 | `get/1` | `{:error, :not_found}` means definitively gone; anything transient is a different error |
 | `destroy/1` | tolerates an already-gone sandbox |
 | `list_all_names/0` | the whole account view, or `{:error, :truncated}`; never a partial view that looks whole |
@@ -40,7 +41,7 @@ Its moduledoc is normative; the short version:
 | `terminate_session/3` | optional remote stop; success requires provider-confirmed termination or absence, never just local disconnect or HTTP acceptance |
 | `apply_network_policy/2` | `allow: []` is deny-all, never a silent no-op |
 
-Errors are the closed taxonomy `:not_found`, `:truncated`, `:not_supported`,
+Errors are the closed taxonomy `:not_found`, `:truncated`, `:not_supported`, `:already_exists`,
 `:command_exited`, `{:rate_limited, retry_after}`, `{:unavailable, detail}`,
 `{:denied, detail}`, `{:invalid, detail}`, `{:restore_failed, detail}`,
 `{:write_failed, detail}` and `{:provider, provider, detail}`.
@@ -50,8 +51,25 @@ the idempotent calls (never wrap a non-idempotent one in it).
 
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
-`:tty`, `:public_url`, `:terminate_session`. A capability is a promise about the
+`:tty`, `:public_url`, `:terminate_session`, `:create_new`. A capability is a promise about the
 answer, and the conformance suite checks the promise.
+
+`create_new(:sprites, name, wait_for_capacity: false, timeout_ms: 120_000)` makes one POST,
+without retries, redirects or follow-up URL changes. URL authentication is set
+in that request from the adapter's `public_urls` setting. Sprites accepts a timeout
+of 1–120,000 ms (default 120,000) and at most 64 KiB of response data. A successful
+response must name the requested sandbox and include its opaque provider ID.
+The reference fake implements the same fresh-name semantics; other adapters
+return `:not_supported`. Ordinary `create/3` keeps its existing adoption and URL
+behavior.
+
+Persist intent before fresh creation and keep it on a timeout or unconfirmed
+response: the remote machine may exist even after local waiting stops. A create
+conflict does not prove an earlier request was yours. Hosts own reconciliation
+and name-reuse policy. `instance_id` is identity data, not a conditional-delete
+contract; existing name-based operations do not enforce it. HTTP 409 yields `:already_exists`; HTTP 400 remains `{:invalid, _}` because the
+[provider API](https://docs.sprites.dev/api/dev-latest/sprites/#create-sprite)
+also uses it for invalid input. Neither response adopts an existing machine.
 
 `terminate_session(handle, session_id, timeout_ms: 10_000)` is implemented for
 Sprites and the reference fake. Other adapters return `{:error, :not_supported}`;

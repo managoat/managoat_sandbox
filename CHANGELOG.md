@@ -10,6 +10,15 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-09-08
+
+- Add optional `create_new/3` for Sprites and the reference fake. It refuses
+  existing names and returns provider identity in `Handle.instance_id`.
+  Unsupported adapters do not fall back to adopting creation.
+- Bound fresh Sprites creation by time and response size; disable retries,
+  redirects and follow-up URL writes. Lost or malformed responses remain
+  uncertain. This does not provide conditional deletion or host recovery.
+
 ## [0.3.0] - 2026-09-07
 
 - Add optional `terminate_session/3` with an explicit capability. Sprites requires
