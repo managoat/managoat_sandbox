@@ -53,7 +53,7 @@ defmodule Managoat.Sandbox.Sprites do
 
   defp checkpoint_capabilities do
     if Managoat.Sandbox.Config.get(Managoat.Sandbox.Sprites, :checkpoint_creation_enabled, false),
-      do: [:checkpoint],
+      do: [:checkpoint, :create_checkpoint_once],
       else: []
   end
 
@@ -330,6 +330,10 @@ defmodule Managoat.Sandbox.Sprites do
   end
 
   # ── checkpoints ────────────────────────────────────────────────────────────
+
+  @impl true
+  def create_checkpoint_once(handle, opts),
+    do: Managoat.Sandbox.Sprites.CheckpointCreation.create(handle, opts)
 
   @impl true
   def create_checkpoint(%Handle{} = handle, opts) do

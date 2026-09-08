@@ -33,6 +33,7 @@ Its moduledoc is normative; the short version:
 | `create_new/2` | optional fresh creation; conflicts are refused, and success carries `Handle.instance_id` from provider control metadata |
 | `get/1` | `{:error, :not_found}` means definitively gone; anything transient is a different error |
 | `destroy/1` | tolerates an already-gone sandbox |
+| `create_checkpoint_once/2` | optional bounded creation, correlated to a durable host operation ID |
 | `destroy_once/2` | optional bounded deletion without transport retries; success requires confirmed absence |
 | `list_all_names/0` | the whole account view, or `{:error, :truncated}`; never a partial view that looks whole |
 | `exec/4` | blocks until exit and never raises; a nonzero exit is `{:ok, output, code}` |
@@ -52,7 +53,8 @@ the idempotent calls (never wrap a non-idempotent one in it).
 
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
-`:tty`, `:public_url`, `:terminate_session`, `:create_new`, `:destroy_once`. A capability is a promise about the
+`:tty`, `:public_url`, `:terminate_session`, `:create_new`, `:destroy_once`,
+`:create_checkpoint_once`. A capability is a promise about the
 answer, and the conformance suite checks the promise.
 
 `create_new(:sprites, name, wait_for_capacity: false, timeout_ms: 120_000)` makes one POST,
@@ -72,6 +74,23 @@ and redirects, limit response data to 64 KiB, and share a total timeout of
 The host must persist intent and establish ownership first. Sprites still deletes
 by name: `Handle.instance_id` does not make this a conditional delete. Other
 adapters return `:not_supported`; ordinary `destroy/1` keeps its existing behavior.
+
+`create_checkpoint_once(handle, operation_id: id, timeout_ms: 30_000)` requires
+an unreused host operation ID (1–128 ASCII letters, digits, underscores or hyphens).
+Sprites makes one POST and, after a valid terminal `complete` event, one GET to
+find exactly one saved checkpoint with that operation's comment. It never parses
+an ID from progress prose or falls back to an older snapshot. The
+[provider event contract](https://docs.sprites.dev/api/dev-latest/checkpoints/)
+defines the required completion signal.
+
+Both requests use HTTP/1, disable retries and redirects, and share a total
+1–120,000 ms timeout and 64 KiB response budget. Missing completion, malformed
+responses, multiple matches or timeout remain uncertain. The host must persist
+intent before calling, never reuse the operation ID, and reconcile uncertainty
+without repeating the write. Cancellation ends local transport waiting; it does
+not undo a checkpoint already submitted to the provider. Sprites requires
+`checkpoint_creation_enabled: true`; other adapters return `:not_supported`
+without fallback. This is still name-addressed, not a conditional instance write.
 
 Persist intent before fresh creation and keep it on a timeout or unconfirmed
 response: the remote machine may exist even after local waiting stops. A create
