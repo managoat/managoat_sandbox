@@ -66,12 +66,34 @@ defmodule Managoat.Sandbox.Fake do
 
   @impl true
   def capabilities,
-    do: MapSet.new([:suspend, :network_policy, :attach, :public_url, :terminate_session])
+    do:
+      MapSet.new([
+        :suspend,
+        :network_policy,
+        :attach,
+        :public_url,
+        :terminate_session,
+        :create_new
+      ])
 
   @impl true
   def build_handle(name) when is_binary(name), do: %Handle{provider: :fake, name: name}
 
   # ── lifecycle ──────────────────────────────────────────────────────────────
+
+  @impl true
+  def create_new(name, _opts) do
+    Agent.get_and_update(@registry, fn state ->
+      if Map.has_key?(state, name) do
+        {{:error, :already_exists}, state}
+      else
+        id = "fake-#{System.unique_integer([:positive, :monotonic])}"
+        handle = %Handle{provider: :fake, name: name, instance_id: id}
+        info = %{status: :running, files: %{}, policy: nil, sessions: %{}, instance_id: id}
+        {{:ok, handle}, Map.put(state, name, info)}
+      end
+    end)
+  end
 
   @impl true
   def create(name, _opts) when is_binary(name) do
@@ -97,8 +119,14 @@ defmodule Managoat.Sandbox.Fake do
   @impl true
   def get(%Handle{name: name}) do
     case Agent.get(@registry, &Map.get(&1, name)) do
-      nil -> {:error, :not_found}
-      %{status: status} -> {:ok, %{status: status, raw: %{}}}
+      nil ->
+        {:error, :not_found}
+
+      %{status: status, instance_id: id} ->
+        {:ok, %{status: status, raw: %{"name" => name, "id" => id}}}
+
+      %{status: status} ->
+        {:ok, %{status: status, raw: %{}}}
     end
   end
 

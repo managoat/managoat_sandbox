@@ -37,7 +37,7 @@ defmodule Managoat.Sandbox.Sprites do
   @impl true
   def capabilities do
     MapSet.new(
-      [:suspend, :network_policy, :attach, :tty, :public_url, :terminate_session] ++
+      [:suspend, :network_policy, :attach, :tty, :public_url, :terminate_session, :create_new] ++
         checkpoint_capabilities()
     )
   end
@@ -49,6 +49,9 @@ defmodule Managoat.Sandbox.Sprites do
   end
 
   # ── lifecycle ──────────────────────────────────────────────────────────────
+
+  @impl true
+  def create_new(name, opts), do: Managoat.Sandbox.Sprites.Creation.create(name, opts)
 
   @impl true
   def build_handle(name) when is_binary(name) do

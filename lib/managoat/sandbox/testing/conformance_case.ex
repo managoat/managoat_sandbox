@@ -105,7 +105,8 @@ defmodule Managoat.Sandbox.ConformanceCase.Identity do
               :attach,
               :tty,
               :public_url,
-              :terminate_session
+              :terminate_session,
+              :create_new
             ])
 
           assert MapSet.subset?(caps, known)
@@ -147,6 +148,20 @@ defmodule Managoat.Sandbox.ConformanceCase.Lifecycle do
   defmacro __using__(opts) do
     quote bind_quoted: [adapter: opts[:adapter]] do
       describe "#{inspect(adapter)} conformance: lifecycle" do
+        test "fresh creation refuses adoption and returns a distinct incarnation after deletion" do
+          if MapSet.member?(@adapter.capabilities(), :create_new) do
+            name = conformance_name()
+            assert {:ok, first} = @adapter.create_new(name, [])
+            assert is_binary(first.instance_id) and byte_size(first.instance_id) > 0
+            assert {:error, reason} = @adapter.create_new(name, [])
+            assert reason == :already_exists or match?({:invalid, _}, reason)
+            assert :ok = @adapter.destroy(first)
+            assert {:ok, second} = @adapter.create_new(name, [])
+            refute first.instance_id == second.instance_id
+            assert :ok = @adapter.destroy(second)
+          end
+        end
+
         test "create is name-keyed and idempotent-adopting" do
           name = conformance_name()
           assert {:ok, first} = @adapter.create(name, [])

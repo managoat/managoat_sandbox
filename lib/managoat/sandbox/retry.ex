@@ -113,7 +113,10 @@ defmodule Managoat.Sandbox.Retry do
   @spec transient?(term()) :: boolean()
   def transient?({:unavailable, _detail}), do: true
   def transient?({:rate_limited, _retry_after}), do: true
-  def transient?(reason) when reason in [:not_found, :truncated, :not_supported], do: false
+
+  def transient?(reason) when reason in [:not_found, :truncated, :not_supported, :already_exists],
+    do: false
+
   def transient?({:denied, _detail}), do: false
   def transient?({:invalid, _detail}), do: false
   def transient?({:restore_failed, _detail}), do: false

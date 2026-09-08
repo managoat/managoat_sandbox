@@ -91,6 +91,9 @@ defmodule Managoat.Sandbox do
     * `:attach` — detachable sessions with replay-from-start
     * `:terminate_session` — provider-confirmed remote process termination
     * `:tty` — PTY allocation on spawn
+    * `:create_new` — one creation attempt without adopting an existing name;
+      success returns provider-issued `Handle.instance_id`. A lost response is
+      uncertain, never evidence of absence or permission to repeat the write
     * `:public_url` — the platform gives each sandbox an HTTP endpoint, and
       the adapter can report it (and make it reachable without a platform
       credential). Agents serve from inside the sandbox and need to be able to
@@ -104,6 +107,7 @@ defmodule Managoat.Sandbox do
           | :tty
           | :public_url
           | :terminate_session
+          | :create_new
 
   @typedoc """
   The provider-neutral error taxonomy.
@@ -111,6 +115,7 @@ defmodule Managoat.Sandbox do
     * `:not_found` — the sandbox/session definitively does not exist
     * `:truncated` — a listing refused to return a partial view
     * `:not_supported` — the adapter does not implement this operation
+    * `:already_exists` — fresh creation refused an existing name; no adoption
     * `:command_exited` — stdin write raced the command's exit
     * `{:rate_limited, retry_after}` — throttled; transient
     * `{:unavailable, detail}` — 5xx / timeout / transport; transient
@@ -124,6 +129,7 @@ defmodule Managoat.Sandbox do
           :not_found
           | :truncated
           | :not_supported
+          | :already_exists
           | :command_exited
           | {:rate_limited, non_neg_integer() | nil}
           | {:unavailable, term()}
@@ -149,6 +155,10 @@ defmodule Managoat.Sandbox do
 
   @doc "Create (or adopt) the named sandbox."
   @callback create(name(), keyword()) :: {:ok, Handle.t()} | {:error, error()}
+
+  @doc "Create a new instance once, returning its control-plane identity; never adopt a conflict."
+  @callback create_new(name(), keyword()) :: {:ok, Handle.t()} | {:error, error()}
+  @optional_callbacks create_new: 2
 
   @doc "Probe the sandbox. `{:error, :not_found}` is definitive absence."
   @callback get(Handle.t()) :: {:ok, info()} | {:error, error()}
@@ -298,6 +308,25 @@ defmodule Managoat.Sandbox do
   @doc "Create (or adopt) a sandbox on the given provider."
   @spec create(provider(), name(), keyword()) :: {:ok, Handle.t()} | {:error, error()}
   def create(provider, name, opts \\ []), do: adapter_for(provider).create(name, opts)
+
+  @doc """
+  Create once without adopting an existing name. Optional; unsupported adapters
+  return `:not_supported` without falling back to `create/3`. Successful handles
+  contain `instance_id` from the create response. Timeout or lost responses are
+  uncertain outcomes: persist intent first and reconcile before another write.
+  Sprites includes URL settings in the create request, without a follow-up write.
+  A conflict reported as HTTP 400 stays `{:invalid, _}` because the provider
+  also uses that status for invalid input. This supplies no conditional delete.
+  """
+  @spec create_new(provider(), name(), keyword()) :: {:ok, Handle.t()} | {:error, error()}
+  def create_new(provider, name, opts \\ []) do
+    mod = adapter_for(provider)
+    Code.ensure_loaded(mod)
+
+    if function_exported?(mod, :create_new, 2),
+      do: mod.create_new(name, opts),
+      else: {:error, :not_supported}
+  end
 
   @doc "Every sandbox name the provider's account holds."
   @spec list_all_names(provider()) :: {:ok, MapSet.t(name())} | {:error, error()}
