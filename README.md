@@ -33,6 +33,7 @@ Its moduledoc is normative; the short version:
 | `create_new/2` | optional fresh creation; conflicts are refused, and success carries `Handle.instance_id` from provider control metadata |
 | `get/1` | `{:error, :not_found}` means definitively gone; anything transient is a different error |
 | `destroy/1` | tolerates an already-gone sandbox |
+| `destroy_once/2` | optional bounded deletion without transport retries; success requires confirmed absence |
 | `list_all_names/0` | the whole account view, or `{:error, :truncated}`; never a partial view that looks whole |
 | `exec/4` | blocks until exit and never raises; a nonzero exit is `{:ok, output, code}` |
 | `spawn/4` | streams `{:stdout | :stderr | :exit | :error, %{ref: ref}, _}` frames to the owner, exactly one terminal frame, after all output; a close with no exit frame is `{:error, _, :closed_before_exit}`, never a synthesised exit 0 |
@@ -51,7 +52,7 @@ the idempotent calls (never wrap a non-idempotent one in it).
 
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
-`:tty`, `:public_url`, `:terminate_session`, `:create_new`. A capability is a promise about the
+`:tty`, `:public_url`, `:terminate_session`, `:create_new`, `:destroy_once`. A capability is a promise about the
 answer, and the conformance suite checks the promise.
 
 `create_new(:sprites, name, wait_for_capacity: false, timeout_ms: 120_000)` makes one POST,
@@ -62,6 +63,15 @@ response must name the requested sandbox and include its opaque provider ID.
 The reference fake implements the same fresh-name semantics; other adapters
 return `:not_supported`. Ordinary `create/3` keeps its existing adoption and URL
 behavior.
+
+`destroy_once(handle, timeout_ms: 30_000)` makes one DELETE. A 404 confirms
+absence; after a 2xx response it makes one GET, which must return 404. A 202 or
+204 write response alone cannot end the operation. Both requests disable retries
+and redirects, limit response data to 64 KiB, and share a total timeout of
+1–120,000 ms. A timeout or missing confirmation is uncertain and grants no retry.
+The host must persist intent and establish ownership first. Sprites still deletes
+by name: `Handle.instance_id` does not make this a conditional delete. Other
+adapters return `:not_supported`; ordinary `destroy/1` keeps its existing behavior.
 
 Persist intent before fresh creation and keep it on a timeout or unconfirmed
 response: the remote machine may exist even after local waiting stops. A create

@@ -94,6 +94,8 @@ defmodule Managoat.Sandbox do
     * `:create_new` — one creation attempt without adopting an existing name;
       success returns provider-issued `Handle.instance_id`. A lost response is
       uncertain, never evidence of absence or permission to repeat the write
+    * `:destroy_once` — one bounded deletion attempt, without transport retries;
+      success requires provider-confirmed absence
     * `:public_url` — the platform gives each sandbox an HTTP endpoint, and
       the adapter can report it (and make it reachable without a platform
       credential). Agents serve from inside the sandbox and need to be able to
@@ -108,6 +110,7 @@ defmodule Managoat.Sandbox do
           | :public_url
           | :terminate_session
           | :create_new
+          | :destroy_once
 
   @typedoc """
   The provider-neutral error taxonomy.
@@ -165,6 +168,10 @@ defmodule Managoat.Sandbox do
 
   @doc "Destroy the sandbox. Already-gone is `:ok`."
   @callback destroy(Handle.t()) :: :ok | {:error, error()}
+
+  @doc "Delete once and confirm absence; an uncertain result grants no retry."
+  @callback destroy_once(Handle.t(), keyword()) :: :ok | {:error, error()}
+  @optional_callbacks destroy_once: 2
 
   @doc "Every sandbox name on the account, or a refusal — never a partial view."
   @callback list_all_names() :: {:ok, MapSet.t(name())} | {:error, error()}
@@ -341,6 +348,24 @@ defmodule Managoat.Sandbox do
   @doc "Destroy a sandbox."
   @spec destroy(Handle.t()) :: :ok | {:error, error()}
   def destroy(%Handle{} = handle), do: adapter(handle).destroy(handle)
+
+  @doc """
+  Attempt deletion once. Unsupported adapters never fall back to `destroy/1`.
+  Sprites makes one DELETE and, after a 2xx response, at most one confirmation
+  GET. Only a 404 establishes absence. Both requests disable retries and
+  redirects and share a total timeout. This is name-based deletion: an instance
+  ID in the handle is not a conditional-write guarantee. Hosts must establish
+  ownership and persist intent before calling it.
+  """
+  @spec destroy_once(Handle.t(), keyword()) :: :ok | {:error, error()}
+  def destroy_once(%Handle{} = handle, opts \\ []) do
+    mod = adapter(handle)
+    Code.ensure_loaded(mod)
+
+    if function_exported?(mod, :destroy_once, 2),
+      do: mod.destroy_once(handle, opts),
+      else: {:error, :not_supported}
+  end
 
   @doc """
   The sandbox's HTTP endpoint.
