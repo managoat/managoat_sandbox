@@ -10,6 +10,14 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-09-08
+
+- Add optional `destroy_once/2` for Sprites: one DELETE and at most one GET to
+  confirm absence, sharing a bounded deadline with retries and redirects off.
+  HTTP acceptance alone does not establish deletion; missing confirmation stays
+  uncertain. This remains name-based deletion, without conditional identity
+  authorization. Other adapters return `:not_supported` without fallback.
+
 ## [0.4.0] - 2026-09-08
 
 - Add optional `create_new/3` for Sprites and the reference fake. It refuses

@@ -37,7 +37,16 @@ defmodule Managoat.Sandbox.Sprites do
   @impl true
   def capabilities do
     MapSet.new(
-      [:suspend, :network_policy, :attach, :tty, :public_url, :terminate_session, :create_new] ++
+      [
+        :suspend,
+        :network_policy,
+        :attach,
+        :tty,
+        :public_url,
+        :terminate_session,
+        :create_new,
+        :destroy_once
+      ] ++
         checkpoint_capabilities()
     )
   end
@@ -133,6 +142,9 @@ defmodule Managoat.Sandbox.Sprites do
       {:error, reason} -> {:error, Errors.normalize(reason)}
     end
   end
+
+  @impl true
+  def destroy_once(handle, opts), do: Managoat.Sandbox.Sprites.Deletion.destroy(handle, opts)
 
   @impl true
   def list_all_names do
