@@ -151,12 +151,12 @@ defmodule Managoat.Sandbox.ConformanceCase.Lifecycle do
         test "fresh creation refuses adoption and returns a distinct incarnation after deletion" do
           if MapSet.member?(@adapter.capabilities(), :create_new) do
             name = conformance_name()
-            assert {:ok, first} = @adapter.create_new(name, [])
+            assert {:ok, first} = apply(@adapter, :create_new, [name, []])
             assert is_binary(first.instance_id) and byte_size(first.instance_id) > 0
-            assert {:error, reason} = @adapter.create_new(name, [])
+            assert {:error, reason} = apply(@adapter, :create_new, [name, []])
             assert reason == :already_exists or match?({:invalid, _}, reason)
             assert :ok = @adapter.destroy(first)
-            assert {:ok, second} = @adapter.create_new(name, [])
+            assert {:ok, second} = apply(@adapter, :create_new, [name, []])
             refute first.instance_id == second.instance_id
             assert :ok = @adapter.destroy(second)
           end
