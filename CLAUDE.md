@@ -16,9 +16,9 @@ release, and the traps.
 
 [`managoat_sandbox`](https://hex.pm/packages/managoat_sandbox) on hex,
 `Managoat.Sandbox` in the code, Apache-2.0 throughout. It was extracted from
-[Fountain](https://github.com/BinaryBourbon/fountain) under that project's ADR
+[Fountain](https://github.com/managoat/fountain) under that project's ADR
 0037 (component libraries, extracted umbrella-first under the `Managoat`
-namespace) and graduated to this repository in BinaryBourbon/fountain#1345.
+namespace) and graduated to this repository in managoat/fountain#1345.
 [NOTICE](NOTICE) records the lineage.
 
 Fountain is now one consumer among others, pinned to a hex release like any
@@ -185,7 +185,7 @@ code the gate and the publish workflow read, so the two can never disagree.
 - **Don't synthesise a terminal frame.** A command stream that ends with no
   exit frame is an error, never a clean exit 0 — that failure mode is what made
   every one of the 533 exit codes Fountain had recorded a synthetic zero
-  (BinaryBourbon/fountain#880).
+  (managoat/fountain#880).
 
 - **Don't describe unbuilt behaviour as existing.** In a moduledoc, the README
   or the changelog, mark what is not yet built as not yet built, and remove the

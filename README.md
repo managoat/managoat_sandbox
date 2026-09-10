@@ -206,10 +206,10 @@ Then, in order:
 
 ## Where it comes from
 
-Extracted from [Fountain](https://github.com/BinaryBourbon/fountain) under
-[ADR 0037](https://github.com/BinaryBourbon/fountain/blob/main/decisions/0037-component-libraries.md);
+Extracted from [Fountain](https://github.com/managoat/fountain) under
+[ADR 0037](https://github.com/managoat/fountain/blob/main/decisions/0037-component-libraries.md);
 the design is
-[ADR 0018](https://github.com/BinaryBourbon/fountain/blob/main/decisions/0018-sandbox-provider-abstraction.md).
+[ADR 0018](https://github.com/managoat/fountain/blob/main/decisions/0018-sandbox-provider-abstraction.md).
 Fountain's self-hosted runner adapter implements this behaviour from outside
 the package, which is what the behaviour is for.
 
