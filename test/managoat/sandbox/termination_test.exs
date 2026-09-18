@@ -83,6 +83,14 @@ defmodule Managoat.Sandbox.TerminationTest do
              Sandbox.terminate_session(handle(), "17", mode: :force)
   end
 
+  test "force mode refuses a legacy adapter before it can ignore the new option" do
+    stub(Adapter, :capabilities, fn -> MapSet.new([:terminate_session]) end)
+    reject(Adapter, :terminate_session, 3)
+
+    assert {:error, :not_supported} =
+             Sandbox.terminate_session(handle(), "17", mode: :force)
+  end
+
   for signal <- [nil, "SIGTERM", "SIGKILL"] do
     test "force stop refuses incomplete signal evidence #{inspect(signal)}" do
       client(fn conn ->

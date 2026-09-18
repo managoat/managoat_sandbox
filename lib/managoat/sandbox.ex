@@ -91,6 +91,7 @@ defmodule Managoat.Sandbox do
     * `:create_checkpoint_once` — bounded checkpoint creation with a host operation ID
     * `:attach` — detachable sessions with replay-from-start
     * `:terminate_session` — provider-confirmed remote process termination
+    * `:force_terminate_session` — explicit force mode without graceful fallback
     * `:tty` — PTY allocation on spawn
     * `:create_new` — one creation attempt without adopting an existing name;
       success returns provider-issued `Handle.instance_id`. A lost response is
@@ -111,6 +112,7 @@ defmodule Managoat.Sandbox do
           | :tty
           | :public_url
           | :terminate_session
+          | :force_terminate_session
           | :create_new
           | :destroy_once
 
@@ -240,6 +242,8 @@ defmodule Managoat.Sandbox do
   parent may have exited while a child remains. Neither mode certifies arbitrary
   descendants that escaped the session's process group.
   Adapters may use up to five further seconds for transport.
+  Force mode additionally requires `:force_terminate_session`; a legacy adapter
+  cannot silently ignore the option and perform graceful termination instead.
   Unsupported adapters must not fall back to destroying the whole sandbox.
   """
   @callback terminate_session(Handle.t(), String.t(), keyword()) :: :ok | {:error, error()}
@@ -456,6 +460,10 @@ defmodule Managoat.Sandbox do
 
       not supports?(handle, :terminate_session) or
           not function_exported?(mod, :terminate_session, 3) ->
+        {:error, :not_supported}
+
+      Keyword.get(opts, :mode, :graceful) == :force and
+          not supports?(handle, :force_terminate_session) ->
         {:error, :not_supported}
 
       true ->

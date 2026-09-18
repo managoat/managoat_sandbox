@@ -20,6 +20,7 @@ the package ships without a bump fails the release gate.
 - Add optional Sprites `terminate_session/3` `mode: :force` to send SIGKILL and
   require its explicit confirmation plus terminal completion. Missing sessions,
   lost responses and incomplete confirmations remain uncertain in force mode.
+  Its separate capability prevents graceful fallback on older custom adapters.
   The existing default graceful termination behavior is unchanged.
 
 ## [0.4.2] - 2026-09-08

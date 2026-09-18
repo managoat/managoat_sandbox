@@ -106,6 +106,7 @@ defmodule Managoat.Sandbox.ConformanceCase.Identity do
               :tty,
               :public_url,
               :terminate_session,
+              :force_terminate_session,
               :create_new
             ])
 

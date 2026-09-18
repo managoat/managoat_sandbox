@@ -73,6 +73,7 @@ defmodule Managoat.Sandbox.Fake do
         :attach,
         :public_url,
         :terminate_session,
+        :force_terminate_session,
         :create_new
       ])
 

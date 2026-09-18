@@ -45,6 +45,7 @@ defmodule Managoat.Sandbox.Sprites do
         :tty,
         :public_url,
         :terminate_session,
+        :force_terminate_session,
         :create_new,
         :destroy_once
       ] ++
