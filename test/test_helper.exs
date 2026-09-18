@@ -2,6 +2,9 @@
 # Req client behind the E2B/Daytona adapters, plus the seams the facade test
 # dispatches through.
 Mimic.copy(Managoat.Sandbox.Sprites)
+Mimic.copy(Managoat.Sandbox.ExecDeadline)
+Mimic.copy(Managoat.Sandbox.E2B.Api)
+Mimic.copy(Managoat.Sandbox.E2B.CommandServer)
 Mimic.copy(Managoat.Sandbox.Sprites.Client)
 Mimic.copy(Managoat.Sandbox.Daytona.LogStream)
 Mimic.copy(Sprites)

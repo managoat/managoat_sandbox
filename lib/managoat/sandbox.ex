@@ -91,6 +91,7 @@ defmodule Managoat.Sandbox do
     * `:create_checkpoint_once` — bounded checkpoint creation with a host operation ID
     * `:attach` — detachable sessions with replay-from-start
     * `:terminate_session` — provider-confirmed remote process termination
+    * `:force_terminate_session` — explicit force mode without graceful fallback
     * `:tty` — PTY allocation on spawn
     * `:create_new` — one creation attempt without adopting an existing name;
       success returns provider-issued `Handle.instance_id`. A lost response is
@@ -111,6 +112,7 @@ defmodule Managoat.Sandbox do
           | :tty
           | :public_url
           | :terminate_session
+          | :force_terminate_session
           | :create_new
           | :destroy_once
 
@@ -233,8 +235,15 @@ defmodule Managoat.Sandbox do
   not replay it against a replacement session or reused sandbox name.
 
   Callers own authorization and must bind the session to the intended sandbox
-  incarnation. Options: `:timeout_ms` (1–30,000; default 10,000), the graceful
-  stop allowance. Adapters may use up to five further seconds for transport.
+  incarnation. Options: `:timeout_ms` (1–30,000; default 10,000), the stop
+  allowance; `:mode` (`:graceful`, the default, or `:force`). Force mode sends
+  an immediate uncatchable kill instead of allowing graceful exit. It requires
+  affirmative termination evidence: a missing session is uncertain because its
+  parent may have exited while a child remains. Neither mode certifies arbitrary
+  descendants that escaped the session's process group.
+  Adapters may use up to five further seconds for transport.
+  Force mode additionally requires `:force_terminate_session`; a legacy adapter
+  cannot silently ignore the option and perform graceful termination instead.
   Unsupported adapters must not fall back to destroying the whole sandbox.
   """
   @callback terminate_session(Handle.t(), String.t(), keyword()) :: :ok | {:error, error()}
@@ -453,6 +462,10 @@ defmodule Managoat.Sandbox do
           not function_exported?(mod, :terminate_session, 3) ->
         {:error, :not_supported}
 
+      Keyword.get(opts, :mode, :graceful) == :force and
+          not supports?(handle, :force_terminate_session) ->
+        {:error, :not_supported}
+
       true ->
         mod.terminate_session(handle, session_id, opts)
     end
@@ -462,8 +475,10 @@ defmodule Managoat.Sandbox do
   def valid_termination?(session_id, opts) do
     is_binary(session_id) and byte_size(session_id) in 1..256 and
       Regex.match?(~r/\A[A-Za-z0-9_-]+\z/, session_id) and
-      Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 == :timeout_ms)) and
-      length(opts) <= 1 and is_integer(Keyword.get(opts, :timeout_ms, 10_000)) and
+      Keyword.keyword?(opts) and Enum.all?(Keyword.keys(opts), &(&1 in [:timeout_ms, :mode])) and
+      length(Enum.uniq(Keyword.keys(opts))) == length(opts) and
+      Keyword.get(opts, :mode, :graceful) in [:graceful, :force] and
+      is_integer(Keyword.get(opts, :timeout_ms, 10_000)) and
       Keyword.get(opts, :timeout_ms, 10_000) in 1..30_000
   end
 

@@ -48,6 +48,7 @@ defmodule Managoat.Sandbox.E2B do
   alias Managoat.Sandbox.E2B.CommandServer
   alias Managoat.Sandbox.E2B.Envd
   alias Managoat.Sandbox.E2B.Errors
+  alias Managoat.Sandbox.ExecDeadline
   alias Managoat.Sandbox.Handle
   alias Managoat.Sandbox.NetworkPolicy
   alias Managoat.Sandbox.Session
@@ -146,10 +147,12 @@ defmodule Managoat.Sandbox.E2B do
 
   @impl true
   def exec(%Handle{} = handle, cmd, args, opts) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    deadline = ExecDeadline.new(Keyword.get(opts, :timeout, :infinity))
     stderr_to_stdout = Keyword.get(opts, :stderr_to_stdout, false)
 
-    with {:ok, id} <- resolve_running(handle.name) do
+    with :ok <- ExecDeadline.check(deadline),
+         {:ok, id} <- resolve_running(handle.name),
+         :ok <- ExecDeadline.check(deadline) do
       ref = make_ref()
       request = {"process.Process/Start", Envd.start_request(new_tag(), cmd, args, opts)}
 
@@ -160,33 +163,48 @@ defmodule Managoat.Sandbox.E2B do
              owner: self(),
              request: request
            ) do
-        {:ok, pid} -> collect(pid, ref, [], stderr_to_stdout, timeout)
+        {:ok, pid} -> collect(pid, ref, [], stderr_to_stdout, deadline)
         {:error, reason} -> {:error, Errors.normalize(reason)}
       end
     end
   end
 
-  defp collect(pid, ref, acc, stderr_to_stdout, timeout) do
+  # Check before every receive, including when frames are already queued.
+  # Local collector shutdown is not confirmation that the remote process ended.
+  defp collect(pid, ref, acc, stderr_to_stdout, deadline) do
+    case ExecDeadline.remaining(deadline) do
+      0 -> expire(pid, deadline)
+      remaining -> collect_frame(pid, ref, acc, stderr_to_stdout, deadline, remaining)
+    end
+  end
+
+  defp collect_frame(pid, ref, acc, stderr_to_stdout, deadline, remaining) do
     receive do
       {:stdout, %{ref: ^ref}, data} ->
-        collect(pid, ref, [acc | data], stderr_to_stdout, timeout)
+        collect(pid, ref, [acc | data], stderr_to_stdout, deadline)
 
       {:stderr, %{ref: ^ref}, data} when stderr_to_stdout ->
-        collect(pid, ref, [acc | data], stderr_to_stdout, timeout)
+        collect(pid, ref, [acc | data], stderr_to_stdout, deadline)
 
       {:stderr, %{ref: ^ref}, _data} ->
-        collect(pid, ref, acc, stderr_to_stdout, timeout)
+        collect(pid, ref, acc, stderr_to_stdout, deadline)
 
       {:exit, %{ref: ^ref}, code} ->
-        {:ok, IO.iodata_to_binary(acc), code}
+        case ExecDeadline.check(deadline) do
+          :ok -> {:ok, IO.iodata_to_binary(acc), code}
+          {:error, _} -> expire(pid, deadline)
+        end
 
       {:error, %{ref: ^ref}, reason} ->
         {:error, Errors.normalize(reason)}
     after
-      timeout ->
-        Process.exit(pid, :kill)
-        {:error, {:unavailable, {:exec_timeout, timeout}}}
+      remaining -> expire(pid, deadline)
     end
+  end
+
+  defp expire(pid, deadline) do
+    Process.exit(pid, :kill)
+    ExecDeadline.error(deadline)
   end
 
   @impl true

@@ -51,9 +51,23 @@ Errors are the closed taxonomy `:not_found`, `:truncated`, `:not_supported`, `:a
 `Managoat.Sandbox.Retry.with_backoff/2` is bounded exponential backoff for
 the idempotent calls (never wrap a non-idempotent one in it).
 
+Sprites and E2B `exec/4` use one monotonic deadline when `timeout` is finite.
+Continuous stdout, ignored stderr and queued frames cannot refresh that budget.
+Elapsed lookup and startup time consumes it; a completed synchronous startup
+that has already exhausted the deadline does not begin a fresh collection wait.
+E2B refuses command dispatch if lookup has exhausted it. `timeout: :infinity`
+retains unbounded collection. Timeout errors remain
+`{:error, {:unavailable, {:exec_timeout, timeout}}}`.
+
+This deadline does not interrupt synchronous provider lookup or startup: those
+calls retain their own transport bounds and may return after the deadline.
+Timeout kills the local command process only; it does not establish termination
+of the remote command or its descendants. Hosts must retain execution uncertainty
+across local timeouts rather than treating them as permission to park or delete.
+
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
-`:tty`, `:public_url`, `:terminate_session`, `:create_new`, `:destroy_once`,
+`:tty`, `:public_url`, `:terminate_session`, `:force_terminate_session`, `:create_new`, `:destroy_once`,
 `:create_checkpoint_once`. A capability is a promise about the
 answer, and the conformance suite checks the promise.
 
@@ -103,10 +117,20 @@ also uses it for invalid input. Neither response adopts an existing machine.
 `terminate_session(handle, session_id, timeout_ms: 10_000)` is implemented for
 Sprites and the reference fake. Other adapters return `{:error, :not_supported}`;
 they do not destroy the sandbox as a fallback. The grace interval is 1–30,000 ms,
-with up to five further seconds for transport. Sprites escalates SIGTERM to
-SIGKILL and requires affirmative termination plus the final completion frame.
+with up to five further seconds for transport. Graceful mode requests SIGTERM
+and requires affirmative session termination plus the final completion frame.
 An error, malformed/truncated stream or lost response remains uncertain. There
 is no automatic retry or redirect, and output is bounded to 16 KiB.
+
+`mode: :force` requests immediate SIGKILL for the session's process group.
+The adapter must advertise `:force_terminate_session`; older adapters that only
+support graceful termination return `:not_supported` before any stop request.
+Use it when a graceful parent exit could leave a TERM-resistant child running.
+It requires a SIGKILL signal event and affirmative terminal completion; unlike
+graceful mode, a 404 remains uncertain because session disappearance does not
+prove its descendants stopped. The timeout is a wait allowance, with the same
+transport grace. This does not cover descendants that create another process
+group, lost-start recovery, or a complete read/lifecycle exclusion protocol.
 
 The host must authorize the exact sandbox incarnation and session, persist its
 intent, and prevent session reuse while termination is uncertain. A confirmed

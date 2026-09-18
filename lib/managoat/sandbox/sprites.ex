@@ -23,6 +23,7 @@ defmodule Managoat.Sandbox.Sprites do
   @behaviour Managoat.Sandbox
 
   alias Managoat.Sandbox.Command
+  alias Managoat.Sandbox.ExecDeadline
   alias Managoat.Sandbox.Handle
   alias Managoat.Sandbox.NetworkPolicy
   alias Managoat.Sandbox.Session
@@ -44,6 +45,7 @@ defmodule Managoat.Sandbox.Sprites do
         :tty,
         :public_url,
         :terminate_session,
+        :force_terminate_session,
         :create_new,
         :destroy_once
       ] ++
@@ -182,47 +184,66 @@ defmodule Managoat.Sandbox.Sprites do
 
   @impl true
   def exec(%Handle{} = handle, cmd, args, opts) do
-    timeout = Keyword.get(opts, :timeout, :infinity)
+    deadline = ExecDeadline.new(Keyword.get(opts, :timeout, :infinity))
     stderr_to_stdout = Keyword.get(opts, :stderr_to_stdout, false)
     spawn_opts = Keyword.take(opts, [:env, :dir]) ++ [owner: self()]
 
-    case Sprites.spawn(sprite_of(handle), cmd, args, spawn_opts) do
-      {:ok, %Sprites.Command{} = command} ->
-        collect(command, [], stderr_to_stdout, timeout)
+    with :ok <- ExecDeadline.check(deadline) do
+      case Sprites.spawn(sprite_of(handle), cmd, args, spawn_opts) do
+        {:ok, %Sprites.Command{} = command} ->
+          collect(command, [], stderr_to_stdout, deadline)
 
-      {:error, reason} ->
-        {:error, Errors.normalize(reason)}
+        {:error, reason} ->
+          {:error, Errors.normalize(reason)}
+      end
     end
   end
 
   # The SDK's own blocking `Sprites.cmd/4` raises on failure-to-start, on a
-  # mid-run transport error and on timeout, which forced callers (and
-  # `Managoat.Sandbox.Retry`) to treat every raise as transient. Collecting here
-  # instead keeps the contract total: a nonzero exit is data, everything
-  # else is a tagged error.
-  defp collect(%Sprites.Command{ref: ref} = command, acc, stderr_to_stdout, timeout) do
+  # mid-run transport error and on timeout. Collecting here preserves the
+  # tagged-error contract. A monotonic deadline includes elapsed startup time
+  # and must be checked before receiving: `after 0` alone still drains a busy
+  # mailbox indefinitely. Killing the local process does not confirm remote stop.
+  defp collect(%Sprites.Command{} = command, acc, stderr_to_stdout, deadline) do
+    case ExecDeadline.remaining(deadline) do
+      0 -> expire(command, deadline)
+      remaining -> collect_frame(command, acc, stderr_to_stdout, deadline, remaining)
+    end
+  end
+
+  defp collect_frame(
+         %Sprites.Command{ref: ref} = command,
+         acc,
+         stderr_to_stdout,
+         deadline,
+         remaining
+       ) do
     receive do
       {:stdout, %{ref: ^ref}, data} ->
-        collect(command, [acc | data], stderr_to_stdout, timeout)
+        collect(command, [acc | data], stderr_to_stdout, deadline)
 
       {:stderr, %{ref: ^ref}, data} when stderr_to_stdout ->
-        collect(command, [acc | data], stderr_to_stdout, timeout)
+        collect(command, [acc | data], stderr_to_stdout, deadline)
 
       {:stderr, %{ref: ^ref}, _data} ->
-        collect(command, acc, stderr_to_stdout, timeout)
+        collect(command, acc, stderr_to_stdout, deadline)
 
       {:exit, %{ref: ^ref}, code} ->
-        {:ok, IO.iodata_to_binary(acc), code}
+        case ExecDeadline.check(deadline) do
+          :ok -> {:ok, IO.iodata_to_binary(acc), code}
+          {:error, _} -> expire(command, deadline)
+        end
 
       {:error, %{ref: ^ref}, reason} ->
         {:error, Errors.normalize(reason)}
     after
-      timeout ->
-        # Stop the command process so it cannot keep streaming into the
-        # caller's mailbox after we have given up on it.
-        Process.exit(command.pid, :kill)
-        {:error, {:unavailable, {:exec_timeout, timeout}}}
+      remaining -> expire(command, deadline)
     end
+  end
+
+  defp expire(%Sprites.Command{pid: pid}, deadline) do
+    Process.exit(pid, :kill)
+    ExecDeadline.error(deadline)
   end
 
   @impl true
@@ -292,7 +313,8 @@ defmodule Managoat.Sandbox.Sprites do
       Managoat.Sandbox.Sprites.Termination.terminate(
         handle.name,
         session_id,
-        Keyword.get(opts, :timeout_ms, 10_000)
+        Keyword.get(opts, :timeout_ms, 10_000),
+        Keyword.get(opts, :mode, :graceful)
       )
     else
       {:error, {:invalid, :termination_request}}
