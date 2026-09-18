@@ -292,7 +292,8 @@ defmodule Managoat.Sandbox.Sprites do
       Managoat.Sandbox.Sprites.Termination.terminate(
         handle.name,
         session_id,
-        Keyword.get(opts, :timeout_ms, 10_000)
+        Keyword.get(opts, :timeout_ms, 10_000),
+        Keyword.get(opts, :mode, :graceful)
       )
     else
       {:error, {:invalid, :termination_request}}

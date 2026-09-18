@@ -63,6 +63,17 @@ defmodule Managoat.Sandbox.FakeTerminationTest do
     assert :ok = Fake.terminate_session(worker, id, [])
   end
 
+  test "force stop confirms a known process but leaves missing identity uncertain", %{
+    worker: worker
+  } do
+    {command, id} = start(worker, "victim")
+    assert :ok = Fake.terminate_session(worker, id, mode: :force)
+    refute Process.alive?(command.private.pid)
+
+    assert {:error, {:unavailable, :termination_unconfirmed}} =
+             Fake.terminate_session(worker, "absent", mode: :force)
+  end
+
   test "completed results are preserved and destroyed handles can still detach", %{worker: worker} do
     {command, id} = start(worker, "done")
     ref = command.ref

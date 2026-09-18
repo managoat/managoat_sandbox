@@ -50,6 +50,58 @@ defmodule Managoat.Sandbox.TerminationTest do
     assert :ok = Adapter.terminate_session(handle(), "17", [])
   end
 
+  test "force stop sends SIGKILL once and requires its affirmative completion" do
+    owner = self()
+
+    client(fn conn ->
+      conn = Plug.Conn.fetch_query_params(conn)
+      send(owner, {:force_request, conn.method, conn.request_path, conn.query_params})
+
+      Plug.Conn.send_resp(
+        conn,
+        200,
+        body([
+          %{type: "signal", signal: "SIGKILL", pid: 17},
+          %{type: "exited"},
+          %{type: "complete", exit_code: 137}
+        ])
+      )
+    end)
+
+    assert :ok = Sandbox.terminate_session(handle(), "17", mode: :force, timeout_ms: 500)
+
+    assert_receive {:force_request, "POST", "/v1/sprites/owned-worker/exec/17/kill",
+                    %{"signal" => "SIGKILL", "timeout" => "500ms"}}
+
+    refute_receive {:force_request, _, _, _}
+  end
+
+  test "force stop cannot treat a missing parent session as absence of descendants" do
+    client(fn conn -> Plug.Conn.send_resp(conn, 404, "absent") end)
+
+    assert {:error, {:unavailable, :termination_unconfirmed}} =
+             Sandbox.terminate_session(handle(), "17", mode: :force)
+  end
+
+  for signal <- [nil, "SIGTERM", "SIGKILL"] do
+    test "force stop refuses incomplete signal evidence #{inspect(signal)}" do
+      client(fn conn ->
+        Plug.Conn.send_resp(
+          conn,
+          200,
+          body([
+            %{type: "signal", signal: unquote(signal)},
+            %{type: "exited"},
+            %{type: "complete", exit_code: 0}
+          ])
+        )
+      end)
+
+      assert {:error, {:unavailable, :termination_unconfirmed}} =
+               Adapter.terminate_session(handle(), "17", mode: :force)
+    end
+  end
+
   for {label, response} <- [
         {"empty", ""},
         {"signal only", "{\"type\":\"signal\"}\n"},
@@ -149,6 +201,8 @@ defmodule Managoat.Sandbox.TerminationTest do
           [timeout_ms: 30_001],
           [timeout_ms: 1.5],
           [signal: "KILL"],
+          [mode: :unknown],
+          [mode: :force, mode: :graceful],
           [timeout_ms: 1, timeout_ms: 2],
           %{}
         ] do

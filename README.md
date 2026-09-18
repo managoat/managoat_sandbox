@@ -108,6 +108,14 @@ SIGKILL and requires affirmative termination plus the final completion frame.
 An error, malformed/truncated stream or lost response remains uncertain. There
 is no automatic retry or redirect, and output is bounded to 16 KiB.
 
+`mode: :force` requests immediate SIGKILL for the session's process group.
+Use it when a graceful parent exit could leave a TERM-resistant child running.
+It requires a SIGKILL signal event and affirmative terminal completion; unlike
+graceful mode, a 404 remains uncertain because session disappearance does not
+prove its descendants stopped. The timeout is a wait allowance, with the same
+transport grace. This does not cover descendants that create another process
+group, lost-start recovery, or a complete read/lifecycle exclusion protocol.
+
 The host must authorize the exact sandbox incarnation and session, persist its
 intent, and prevent session reuse while termination is uncertain. A confirmed
 stop provides no passing-test evidence, original exit result, or billed-cost

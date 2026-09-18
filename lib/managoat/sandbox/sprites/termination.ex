@@ -7,9 +7,10 @@ defmodule Managoat.Sandbox.Sprites.Termination do
   @transport_grace_ms 5_000
 
   # The SDK's stop closes this node's WebSocket. The provider kill endpoint
-  # targets the remote process group and escalates SIGTERM to SIGKILL.
+  # targets the remote process group. Graceful stop can finish when its parent
+  # exits, before a TERM-resistant child does. Force stop kills the group first.
   # https://docs.sprites.dev/api/dev-latest/exec/#kill-exec-session
-  def terminate(name, session_id, timeout_ms) do
+  def terminate(name, session_id, timeout_ms, mode \\ :graceful) do
     client = Client.get!()
     path = "/v1/sprites/#{segment(name)}/exec/#{segment(session_id)}/kill"
 
@@ -19,7 +20,7 @@ defmodule Managoat.Sandbox.Sprites.Termination do
           client.req
           |> Req.post(
             url: path,
-            params: [signal: "SIGTERM", timeout: "#{timeout_ms}ms"],
+            params: [signal: signal(mode), timeout: "#{timeout_ms}ms"],
             retry: false,
             redirect: false,
             decode_body: false,
@@ -27,7 +28,7 @@ defmodule Managoat.Sandbox.Sprites.Termination do
             receive_timeout: timeout_ms + @transport_grace_ms,
             into: &collect/2
           )
-          |> result()
+          |> result(mode)
         rescue
           _ -> {:error, {:unavailable, :termination_transport_failed}}
         catch
@@ -42,6 +43,8 @@ defmodule Managoat.Sandbox.Sprites.Termination do
   end
 
   defp segment(value), do: URI.encode(value, &URI.char_unreserved?/1)
+  defp signal(:graceful), do: "SIGTERM"
+  defp signal(:force), do: "SIGKILL"
 
   defp collect({:data, data}, {request, response}) do
     body = response.body || ""
@@ -53,28 +56,45 @@ defmodule Managoat.Sandbox.Sprites.Termination do
     end
   end
 
-  defp result({:ok, %{status: 404}}), do: :ok
+  defp result({:ok, %{status: 404}}, :graceful), do: :ok
 
-  defp result({:ok, %{status: 200, body: body}}) when is_binary(body) do
+  defp result({:ok, %{status: 404}}, :force),
+    do: {:error, {:unavailable, :termination_unconfirmed}}
+
+  defp result({:ok, %{status: 200, body: body}}, mode) when is_binary(body) do
     with true <- byte_size(body) <= @max_bytes,
          lines when lines != [] <- String.split(body, "\n", trim: true),
          {:ok, events} <- decode(lines),
-         true <- terminated?(events) do
+         true <- terminated?(events),
+         true <- signal_confirmed?(events, mode) do
       :ok
     else
       _ -> {:error, {:unavailable, :termination_unconfirmed}}
     end
   end
 
-  defp result({:ok, %{status: 200}}),
+  defp result({:ok, %{status: 200}}, _mode),
     do: {:error, {:unavailable, :termination_unconfirmed}}
 
   # Provider prose is not needed to classify the failure and can contain
   # private command details. Do not return it to the host's logs.
-  defp result({:ok, %{status: status}}),
+  defp result({:ok, %{status: status}}, _mode),
     do: {:error, Errors.normalize({:api_error, status, %{}})}
 
-  defp result({:error, _}), do: {:error, {:unavailable, :termination_transport_failed}}
+  defp result({:error, _}, _mode), do: {:error, {:unavailable, :termination_transport_failed}}
+
+  defp signal_confirmed?(_events, :graceful), do: true
+
+  defp signal_confirmed?(events, :force) do
+    Enum.any?(events, fn
+      %{"type" => "signal", "signal" => "SIGKILL", "pid" => pid}
+      when is_integer(pid) and pid > 0 ->
+        true
+
+      _ ->
+        false
+    end)
+  end
 
   defp decode(lines) do
     Enum.reduce_while(lines, {:ok, []}, fn line, {:ok, events} ->

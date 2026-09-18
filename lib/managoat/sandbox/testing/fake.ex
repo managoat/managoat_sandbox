@@ -275,14 +275,17 @@ defmodule Managoat.Sandbox.Fake do
   @impl true
   def terminate_session(%Handle{name: name}, session_id, opts) do
     if Managoat.Sandbox.valid_termination?(session_id, opts) do
-      terminate_remote(name, session_id)
+      terminate_remote(name, session_id, Keyword.get(opts, :mode, :graceful))
     else
       {:error, {:invalid, :termination_request}}
     end
   end
 
-  defp terminate_remote(name, session_id) do
+  defp terminate_remote(name, session_id, mode) do
     case Agent.get(@registry, &get_in(&1, [name, :sessions, session_id])) do
+      nil when mode == :force ->
+        {:error, {:unavailable, :termination_unconfirmed}}
+
       nil ->
         :ok
 
