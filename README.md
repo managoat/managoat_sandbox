@@ -51,6 +51,20 @@ Errors are the closed taxonomy `:not_found`, `:truncated`, `:not_supported`, `:a
 `Managoat.Sandbox.Retry.with_backoff/2` is bounded exponential backoff for
 the idempotent calls (never wrap a non-idempotent one in it).
 
+Sprites and E2B `exec/4` use one monotonic deadline when `timeout` is finite.
+Continuous stdout, ignored stderr and queued frames cannot refresh that budget.
+Elapsed lookup and startup time consumes it; a completed synchronous startup
+that has already exhausted the deadline does not begin a fresh collection wait.
+E2B refuses command dispatch if lookup has exhausted it. `timeout: :infinity`
+retains unbounded collection. Timeout errors remain
+`{:error, {:unavailable, {:exec_timeout, timeout}}}`.
+
+This deadline does not interrupt synchronous provider lookup or startup: those
+calls retain their own transport bounds and may return after the deadline.
+Timeout kills the local command process only; it does not establish termination
+of the remote command or its descendants. Hosts must retain execution uncertainty
+across local timeouts rather than treating them as permission to park or delete.
+
 Capabilities (`capabilities/0`) say what an adapter can do beyond the
 required operations: `:suspend`, `:network_policy`, `:checkpoint`, `:attach`,
 `:tty`, `:public_url`, `:terminate_session`, `:create_new`, `:destroy_once`,

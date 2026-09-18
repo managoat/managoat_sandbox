@@ -10,6 +10,18 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-09-18
+
+- Use one monotonic `exec/4` collection deadline for Sprites and E2B. Output,
+  including ignored stderr and queued frames, no longer resets a finite timeout.
+  Startup elapsed time consumes the collection budget, and E2B does not dispatch
+  a command after lookup consumes it. Synchronous startup remains subject to
+  its own transport bounds; a local timeout does not prove remote termination.
+- Add optional Sprites `terminate_session/3` `mode: :force` to send SIGKILL and
+  require its explicit confirmation plus terminal completion. Missing sessions,
+  lost responses and incomplete confirmations remain uncertain in force mode.
+  The existing default graceful termination behavior is unchanged.
+
 ## [0.4.2] - 2026-09-08
 
 - Add optional `create_checkpoint_once/2` for Sprites. One POST and one
