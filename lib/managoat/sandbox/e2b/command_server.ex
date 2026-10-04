@@ -73,6 +73,11 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
       # In attach mode, stdin targets the ORIGINAL tagged process while the
       # stream comes from the replayer.
       stdin_tag: Keyword.get(opts, :stdin_tag, Keyword.fetch!(opts, :tag)),
+      # The pid stdin is addressed by once known: from this stream's start
+      # event when stdin is this process's own, or looked up from the tag the
+      # first time a tag selector is refused. See `stdin_target/1`.
+      stdin_pid: nil,
+      attach?: Keyword.has_key?(opts, :stdin_tag),
       request: Keyword.fetch!(opts, :request),
       exit_file: Keyword.get(opts, :exit_file),
       buffer: <<>>,
@@ -113,8 +118,11 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   def handle_call({:write_stdin, data}, _from, state) do
     # By the time writes are allowed the process has been start-acked, so a
     # 404 here means it has since exited — the contract's :command_exited.
+    {reply, state} =
+      with_stdin_target(state, &Envd.send_input(state.sandbox_id, &1, data))
+
     reply =
-      case Envd.send_input(state.sandbox_id, state.stdin_tag, data) do
+      case reply do
         {:error, {:api_error, 404, _body}} -> {:error, :command_exited}
         other -> other
       end
@@ -130,7 +138,29 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   def handle_call(:await_start, from, state), do: {:noreply, %{state | await_from: from}}
 
   def handle_call(:close_stdin, _from, state) do
-    {:reply, Envd.close_stdin(state.sandbox_id, state.stdin_tag), state}
+    {reply, state} = with_stdin_target(state, &Envd.close_stdin(state.sandbox_id, &1))
+    {:reply, reply, state}
+  end
+
+  # Address stdin by pid when it is known, else by tag. A resumed sandbox's
+  # envd refuses a tag selector with 404 while it still lists the process
+  # under that tag, so a refused tag is resolved to its pid once and the call
+  # retried; the pid is kept for every later call. A tag envd no longer lists
+  # is a process that has exited, and the 404 stands.
+  defp with_stdin_target(%{stdin_pid: pid} = state, call) when is_integer(pid),
+    do: {call.({:pid, pid}), state}
+
+  defp with_stdin_target(state, call) do
+    case call.(state.stdin_tag) do
+      {:error, {:api_error, 404, _body}} = refused ->
+        case Envd.pid_for_tag(state.sandbox_id, state.stdin_tag) do
+          {:ok, pid} -> {call.({:pid, pid}), %{state | stdin_pid: pid}}
+          _ -> {refused, state}
+        end
+
+      other ->
+        {other, state}
+    end
   end
 
   @impl true
@@ -194,9 +224,19 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
     end
   end
 
-  defp handle_event(%{"start" => _start}, state) do
+  # The start event names the process's pid. It is stdin's target only when
+  # stdin is this process's own: an attach streams from a replayer and writes
+  # to the original process, whose pid is looked up instead.
+  defp handle_event(%{"start" => start}, state) do
     if state.await_from, do: GenServer.reply(state.await_from, :ok)
-    %{state | started?: true, await_from: nil}
+
+    pid =
+      case {state.attach?, start} do
+        {false, %{"pid" => pid}} when is_integer(pid) -> pid
+        _ -> state.stdin_pid
+      end
+
+    %{state | started?: true, await_from: nil, stdin_pid: pid}
   end
 
   defp handle_event(%{"data" => data}, state) do

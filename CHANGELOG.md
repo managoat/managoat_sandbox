@@ -10,6 +10,18 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.1] - 2026-10-04
+
+- E2B: write stdin and close it by the process's pid rather than its tag. After
+  a sandbox is paused and resumed, envd still lists its processes under their
+  tags but answers `404 process with tag … not found` to a tag selector, while a
+  pid selector reaches them. Every stdin write to a process started after a
+  resume therefore failed as `:command_exited`, so an ACP agent spawned there
+  could not be sent `initialize`. A spawned process's stdin now goes by the pid
+  its start event names. An attach, whose stdin is the original process's,
+  resolves the tag to a pid once, on the first refusal, and keeps it. A tag
+  envd no longer lists is still `:command_exited`.
+
 ## [0.5.0] - 2026-09-18
 
 - Use one monotonic `exec/4` collection deadline for Sprites and E2B. Output,
