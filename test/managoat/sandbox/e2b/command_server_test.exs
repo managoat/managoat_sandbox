@@ -106,6 +106,78 @@ defmodule Managoat.Sandbox.E2B.CommandServerTest do
              CommandServer.handle_call({:write_stdin, "late"}, nil, state)
   end
 
+  # A paused-and-resumed sandbox's envd lists its processes by tag but
+  # answers 404 to a tag selector; a pid selector still reaches them
+  # (observed on E2B, 2026-10-04). Stdin goes by pid once it is known.
+  describe "the stdin target" do
+    setup do
+      {:ok, calls} = Agent.start_link(fn -> [] end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        {:ok, body, conn} = Plug.Conn.read_body(conn)
+        request = Jason.decode!(body)
+        Agent.update(calls, &(&1 ++ [{conn.request_path, request}]))
+
+        case {conn.request_path, request} do
+          {"/process.Process/List", _} ->
+            Req.Test.json(conn, %{"processes" => [%{"tag" => "tag", "pid" => 7}]})
+
+          {_, %{"process" => %{"tag" => _}}} ->
+            conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"code" => "not_found"})
+
+          {_, %{"process" => %{"pid" => _}}} ->
+            Req.Test.json(conn, %{})
+        end
+      end)
+
+      %{calls: calls}
+    end
+
+    test "is the pid the start event names", %{calls: calls} do
+      start = Envd.encode_frame(%{"event" => %{"start" => %{"pid" => 42}}})
+      assert {:noreply, started} = CommandServer.handle_info({:chunk, start}, state())
+      assert started.stdin_pid == 42
+
+      assert {:reply, {:ok, _}, _} =
+               CommandServer.handle_call({:write_stdin, "hi"}, nil, started)
+
+      assert {:reply, {:ok, _}, _} = CommandServer.handle_call(:close_stdin, nil, started)
+
+      assert [
+               {"/process.Process/SendInput", %{"process" => %{"pid" => 42}}},
+               {"/process.Process/CloseStdin", %{"process" => %{"pid" => 42}}}
+             ] = Agent.get(calls, & &1)
+    end
+
+    test "a tag envd refuses but still lists is resolved to its pid, once", %{calls: calls} do
+      attached = %{state() | attach?: true}
+
+      assert {:reply, {:ok, _}, resolved} =
+               CommandServer.handle_call({:write_stdin, "hi"}, nil, attached)
+
+      assert resolved.stdin_pid == 7
+
+      assert {:reply, {:ok, _}, ^resolved} =
+               CommandServer.handle_call({:write_stdin, "again"}, nil, resolved)
+
+      assert [
+               {"/process.Process/SendInput", %{"process" => %{"tag" => "tag"}}},
+               {"/process.Process/List", _},
+               {"/process.Process/SendInput", %{"process" => %{"pid" => 7}}},
+               {"/process.Process/SendInput", %{"process" => %{"pid" => 7}}}
+             ] = Agent.get(calls, & &1)
+    end
+
+    test "an attach does not take the replayer's pid for the original process's" do
+      start = Envd.encode_frame(%{"event" => %{"start" => %{"pid" => 42}}})
+
+      assert {:noreply, started} =
+               CommandServer.handle_info({:chunk, start}, %{state() | attach?: true})
+
+      assert started.stdin_pid == nil
+    end
+  end
+
   test "await-start state variants reply immediately" do
     started = %{state() | started?: true}
     exited = %{state() | exited?: true}
@@ -194,6 +266,8 @@ defmodule Managoat.Sandbox.E2B.CommandServerTest do
       ref: make_ref(),
       owner: self(),
       stdin_tag: "tag",
+      stdin_pid: nil,
+      attach?: false,
       request: {"process.Process/Start", %{}},
       exit_file: nil,
       buffer: <<>>,

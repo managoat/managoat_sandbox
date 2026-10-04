@@ -61,20 +61,38 @@ defmodule Managoat.Sandbox.E2B.Envd do
 
   # ── unary process calls ────────────────────────────────────────────────────
 
-  @doc "Write stdin bytes to the process selected by `tag`."
-  def send_input(sandbox_id, tag, data) do
+  @doc "Write stdin bytes to the process selected by `process` (a tag, or `{:pid, pid}`)."
+  #
+  # `process` is a tag, or `{:pid, pid}`. A paused-and-resumed sandbox's envd
+  # still lists its processes by tag but answers 404 to a tag selector, while
+  # a pid selector reaches them (observed 2026-10-04), so a caller that knows
+  # the pid addresses the process by it.
+  def send_input(sandbox_id, process, data) do
     payload = %{
-      process: %{tag: tag},
+      process: selector(process),
       input: %{stdin: Base.encode64(IO.iodata_to_binary(data))}
     }
 
     unary(sandbox_id, "process.Process/SendInput", payload)
   end
 
-  @doc "Send stdin EOF to the process selected by `tag`."
-  def close_stdin(sandbox_id, tag) do
-    unary(sandbox_id, "process.Process/CloseStdin", %{process: %{tag: tag}})
+  @doc "Send stdin EOF to the process selected by `process` (a tag, or `{:pid, pid}`)."
+  def close_stdin(sandbox_id, process) do
+    unary(sandbox_id, "process.Process/CloseStdin", %{process: selector(process)})
   end
+
+  @doc "The pid envd lists for the process tagged `tag`, if it lists one."
+  def pid_for_tag(sandbox_id, tag) do
+    with {:ok, processes} <- list_processes(sandbox_id) do
+      case Enum.find(processes, &(&1["tag"] == tag)) do
+        %{"pid" => pid} when is_integer(pid) -> {:ok, pid}
+        _ -> {:error, :not_found}
+      end
+    end
+  end
+
+  defp selector({:pid, pid}), do: %{pid: pid}
+  defp selector(tag) when is_binary(tag), do: %{tag: tag}
 
   @doc "List the processes envd is running."
   def list_processes(sandbox_id) do
