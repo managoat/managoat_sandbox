@@ -7,7 +7,8 @@ defmodule Managoat.Sandbox.Config do
       config :managoat_sandbox, Managoat.Sandbox.Sprites,
         token: System.get_env("SPRITES_TOKEN"),
         base_url: "https://api.sprites.dev",
-        timeout_ms: 30_000
+        timeout_ms: 30_000,
+        policy_timeout_ms: 90_000
 
       config :managoat_sandbox, Managoat.Sandbox.E2B, api_key: ..., template: "base"
       config :managoat_sandbox, Managoat.Sandbox.Daytona, api_key: ..., snapshot: nil

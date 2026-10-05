@@ -10,6 +10,16 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.2] - 2026-10-05
+
+- Sprites: the network policy request waits up to `:policy_timeout_ms` (90 s
+  by default) on a client of its own, instead of the client-wide 30 s.
+  Sprites answers it only once the sprite is running, and a cold boot can
+  take 20–35 s. A request that timed out left its late `204` on the pooled
+  HTTP/1 connection, and the retry that reused that connection read it as its
+  own response and raised `CaseClauseError {:status, ref, 204}`
+  (fountain#2559). `Client.get!/1` takes a `:timeout` override.
+
 ## [0.5.1] - 2026-10-04
 
 - E2B: write stdin and close it by the process's pid rather than its tag. After

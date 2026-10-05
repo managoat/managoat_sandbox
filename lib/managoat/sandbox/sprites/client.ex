@@ -13,8 +13,13 @@ defmodule Managoat.Sandbox.Sprites.Client do
   # first page is worse than no reconciliation, because it looks complete.
   @max_pages 40
 
-  @doc "Returns a Sprites client, or raises if SPRITES_TOKEN is not set."
-  def get! do
+  @doc """
+  Returns a Sprites client, or raises if SPRITES_TOKEN is not set.
+
+  `:timeout` overrides the configured HTTP timeout for this client, for a call
+  known to outlast it (`Managoat.Sandbox.Sprites.apply_network_policy/2`).
+  """
+  def get!(opts \\ []) do
     token =
       Managoat.Sandbox.Config.get(Managoat.Sandbox.Sprites, :token) ||
         raise "SPRITES_TOKEN is not set — cannot talk to sprites.dev"
@@ -25,7 +30,10 @@ defmodule Managoat.Sandbox.Sprites.Client do
     # Explicit rather than the library default, so an operator can see and
     # tune it (SPRITES_TIMEOUT_MS). This bounds every HTTP call the client
     # makes; long-running execs pass their own :timeout.
-    timeout = Managoat.Sandbox.Config.get(Managoat.Sandbox.Sprites, :timeout_ms, 30_000)
+    timeout =
+      Keyword.get_lazy(opts, :timeout, fn ->
+        Managoat.Sandbox.Config.get(Managoat.Sandbox.Sprites, :timeout_ms, 30_000)
+      end)
 
     Sprites.new(token, base_url: base_url, timeout: timeout)
   end
