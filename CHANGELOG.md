@@ -10,6 +10,21 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.3] - 2026-10-06
+
+- `Managoat.Sandbox.ConformanceCase` takes three options for adapters that talk
+  to a real provider: `timeout` (how long each frame assertion waits; default
+  1_000 ms, as before), `spawn_opts` (merged into every `spawn/4`, for E2B's
+  `detachable: true` journals) and `moduletag` (tags the conformance tests
+  too, which a `@moduletag` after the `use` misses).
+- A live E2B suite, `test/live/e2b_live_test.exs`: the conformance case against
+  a real e2b.dev account, plus pause and resume (stdin into a fresh process,
+  attach replay of a pre-pause session, the disk, an exec that resumes),
+  `write_file` ownership, exec timeouts and the egress allowlist. `mix test`
+  excludes it; `mix test --only live` runs it with `E2B_API_KEY`. Run against
+  0.5.0 it fails both attach tests with `:command_exited`, the #2574 fault 0.5.1
+  fixed. `.github/workflows/live.yml` runs it daily and on dispatch.
+
 ## [0.5.2] - 2026-10-05
 
 - Sprites: the network policy request waits up to `:policy_timeout_ms` (90 s

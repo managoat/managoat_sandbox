@@ -17,4 +17,6 @@ Mimic.copy(Req)
 # umbrella's config/test.exs sets the same value for the root run.
 Application.put_env(:managoat_sandbox, Managoat.Sandbox.Retry, base_ms: 1)
 
-ExUnit.start()
+# test/live/ talks to real provider accounts and is billed: `mix test --only
+# live` runs it, with the credentials it names.
+ExUnit.start(exclude: [:live])
