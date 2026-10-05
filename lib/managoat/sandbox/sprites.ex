@@ -323,11 +323,21 @@ defmodule Managoat.Sandbox.Sprites do
 
   # ── network policy ─────────────────────────────────────────────────────────
 
+  # Sprites answers the policy POST only once the sprite is running, so on a
+  # sprite that is booting from cold it takes as long as the boot: 20–35 s in
+  # production, past the client's 30 s default (fountain#2559). A timed-out
+  # request leaves its late 204 on the pooled HTTP/1 connection, and the retry
+  # that reuses the connection reads it as its own response and raises a
+  # `CaseClauseError {:status, ref, 204}`. So this one call waits as long as a
+  # boot can take, `:policy_timeout_ms` (90 s by default), on a client of its
+  # own.
   @impl true
   def apply_network_policy(%Handle{} = handle, %NetworkPolicy{allow: allow}) do
     policy = %Sprites.Policy{rules: compile_rules(allow)}
+    timeout = Managoat.Sandbox.Config.get(__MODULE__, :policy_timeout_ms, 90_000)
+    sprite = Sprites.sprite(Client.get!(timeout: timeout), handle.name)
 
-    case Sprites.update_network_policy(sprite_of(handle), policy) do
+    case Sprites.update_network_policy(sprite, policy) do
       :ok -> :ok
       {:error, reason} -> {:error, Errors.normalize(reason)}
     end

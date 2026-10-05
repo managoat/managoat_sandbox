@@ -14,6 +14,10 @@ defmodule Managoat.Sandbox.SpritesTest do
 
   defp stub_client do
     stub(Managoat.Sandbox.Sprites.Client, :get!, fn -> %Sprites.Client{token: "test-token"} end)
+
+    stub(Managoat.Sandbox.Sprites.Client, :get!, fn _opts ->
+      %Sprites.Client{token: "test-token"}
+    end)
   end
 
   describe "identity" do
@@ -428,6 +432,25 @@ defmodule Managoat.Sandbox.SpritesTest do
       end)
 
       assert :ok = Adapter.apply_network_policy(handle(), %NetworkPolicy{allow: []})
+    end
+  end
+
+  describe "the network policy request's timeout (fountain#2559)" do
+    # Sprites answers only once a booting sprite is up, which outlasts the
+    # client's 30 s default; a timed-out request leaves its late answer on
+    # the pooled connection for the retry to misread.
+    test "is 90 s by default, on a client of its own" do
+      test_pid = self()
+
+      stub(Managoat.Sandbox.Sprites.Client, :get!, fn opts ->
+        send(test_pid, {:client_opts, opts})
+        %Sprites.Client{token: "test-token"}
+      end)
+
+      stub(Sprites, :update_network_policy, fn %Sprites.Sprite{name: @name}, _policy -> :ok end)
+
+      assert :ok = Adapter.apply_network_policy(handle(), %NetworkPolicy{allow: []})
+      assert_received {:client_opts, [timeout: 90_000]}
     end
   end
 
