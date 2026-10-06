@@ -367,8 +367,21 @@ defmodule Managoat.Sandbox.Sprites do
   def create_checkpoint_once(handle, opts),
     do: Managoat.Sandbox.Sprites.CheckpointCreation.create(handle, opts)
 
+  # Unadvertised means refused, as `create_checkpoint_once/2` already does: the
+  # conformance case holds every adapter to "refuses rather than pretending",
+  # and a host that skipped the capability check would otherwise checkpoint on
+  # a deployment that turned checkpoints off.
   @impl true
   def create_checkpoint(%Handle{} = handle, opts) do
+    if checkpoints_enabled?(),
+      do: do_create_checkpoint(handle, opts),
+      else: {:error, :not_supported}
+  end
+
+  defp checkpoints_enabled?,
+    do: Managoat.Sandbox.Config.get(Managoat.Sandbox.Sprites, :checkpoint_creation_enabled, false)
+
+  defp do_create_checkpoint(handle, opts) do
     sprite = sprite_of(handle)
     comment = Keyword.get(opts, :comment, "")
 
@@ -427,6 +440,12 @@ defmodule Managoat.Sandbox.Sprites do
 
   @impl true
   def restore_checkpoint(%Handle{} = handle, checkpoint_id) when is_binary(checkpoint_id) do
+    if checkpoints_enabled?(),
+      do: do_restore_checkpoint(handle, checkpoint_id),
+      else: {:error, :not_supported}
+  end
+
+  defp do_restore_checkpoint(handle, checkpoint_id) do
     case Sprites.restore_checkpoint(sprite_of(handle), checkpoint_id) do
       {:ok, stream} ->
         scan_restore_stream(stream)

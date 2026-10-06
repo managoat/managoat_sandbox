@@ -10,6 +10,25 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.4] - 2026-10-06
+
+- Sprites: `create_checkpoint/2` and `restore_checkpoint/2` answer
+  `{:error, :not_supported}` unless `:checkpoint_creation_enabled` is set, as
+  `create_checkpoint_once/2` already did. Without the flag the adapter does not
+  advertise `:checkpoint` but checkpointed anyway, against the conformance
+  rule that an unadvertised capability refuses. Fountain checks the capability
+  and sets both flags from one variable, so it sees no change.
+- `ConformanceCase` knows every capability the behaviour declares
+  (`:create_checkpoint_once` and `:destroy_once` were missing, so the identity
+  test failed for Sprites), and keeps `terminate_session`'s `timeout_ms`
+  within its 30 s bound when a larger `timeout` is given.
+- A live Sprites suite, `test/live/sprites_live_test.exs`: the conformance case
+  against a real organization, plus a fresh sprite's first exec (#2491), a cold
+  wake keeping the disk, the public URL serving without a token, checkpoint
+  restore, `write_file`, exec timeouts and the egress allowlist. `live.yml`
+  gains a `sprites` job (secret `SPRITES_TOKEN`, scoped to the `msb-live-`
+  prefix) and re-runs a failed live test once before failing.
+
 ## [0.5.3] - 2026-10-06
 
 - `Managoat.Sandbox.ConformanceCase` takes three options for adapters that talk
