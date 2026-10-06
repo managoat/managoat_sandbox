@@ -42,6 +42,19 @@ defmodule Managoat.Sandbox.ConformanceCase do
     * `spawn_stay` — emits stdout then stays alive until stdin EOF
       (needed for the write-totality and attach-replay tests)
 
+  Three more options exist for adapters that talk to a real provider:
+
+    * `moduletag` — tags every test in the module, conformance tests
+      included (a `@moduletag` after the `use` misses them), so a live run
+      can be excluded by default
+
+    * `timeout` — how long each `assert_receive` waits for a frame
+      (default 1_000 ms, which suits in-process adapters; a network round
+      trip needs more)
+    * `spawn_opts` — merged into every `spawn/4` call, for an adapter whose
+      attach replay depends on how the command was started (E2B journals
+      only `detachable: true` spawns)
+
   Semantics pinned here and nowhere else: create idempotency, the
   not-found/transient distinction, destroy tolerance, full-view listing,
   exec-never-raises with nonzero-exit-as-data, the owner-message frame
@@ -51,11 +64,21 @@ defmodule Managoat.Sandbox.ConformanceCase do
   """
 
   defmacro __using__(opts) do
+    moduletag =
+      if tag = opts[:moduletag] do
+        quote do: @moduletag(unquote(tag))
+      end
+
     quote do
       use ExUnit.Case, async: false
 
+      # Before any conformance test is defined, so it reaches all of them.
+      unquote(moduletag)
+
       @adapter unquote(opts[:adapter])
       @fixtures unquote(opts[:fixtures])
+      @conformance_timeout unquote(Keyword.get(opts, :timeout, 1_000))
+      @conformance_spawn_opts unquote(Keyword.get(opts, :spawn_opts, []))
 
       # Adapters whose names carry routing (the runner adapter's names name
       # the runner) supply `name: {Mod, :fun, args}` to mint routable ones.
@@ -229,12 +252,19 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
           {cmd, args} = @fixtures.spawn_ok
           handle = created_handle()
 
-          assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: false)
+          assert {:ok, command} =
+                   @adapter.spawn(
+                     handle,
+                     cmd,
+                     args,
+                     Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: false)
+                   )
+
           ref = command.ref
 
-          assert_receive {:stdout, %{ref: ^ref}, data}, 1_000
+          assert_receive {:stdout, %{ref: ^ref}, data}, @conformance_timeout
           assert is_binary(data)
-          assert_receive {:exit, %{ref: ^ref}, 0}, 1_000
+          assert_receive {:exit, %{ref: ^ref}, 0}, @conformance_timeout
           refute_receive {:exit, %{ref: ^ref}, _}, 50
         end
 
@@ -243,11 +273,18 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
             {cmd, args} = @fixtures.spawn_drop
             handle = created_handle()
 
-            assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: false)
+            assert {:ok, command} =
+                     @adapter.spawn(
+                       handle,
+                       cmd,
+                       args,
+                       Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: false)
+                     )
+
             ref = command.ref
 
-            assert_receive {:stdout, %{ref: ^ref}, _}, 1_000
-            assert_receive {:error, %{ref: ^ref}, _reason}, 1_000
+            assert_receive {:stdout, %{ref: ^ref}, _}, @conformance_timeout
+            assert_receive {:error, %{ref: ^ref}, _reason}, @conformance_timeout
 
             # The point of the rule: an unknown fate must not arrive as a
             # clean exit. A synthesised zero is what made every failed setup
@@ -260,9 +297,16 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
           {cmd, args} = @fixtures.spawn_ok
           handle = created_handle()
 
-          assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+          assert {:ok, command} =
+                   @adapter.spawn(
+                     handle,
+                     cmd,
+                     args,
+                     Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: true)
+                   )
+
           ref = command.ref
-          assert_receive {:exit, %{ref: ^ref}, 0}, 1_000
+          assert_receive {:exit, %{ref: ^ref}, 0}, @conformance_timeout
 
           # The command is gone; the write must come back as an error, not
           # take this process down.
@@ -273,23 +317,37 @@ defmodule Managoat.Sandbox.ConformanceCase.Streaming do
           {cmd, args} = @fixtures.spawn_stay
           handle = created_handle()
 
-          assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+          assert {:ok, command} =
+                   @adapter.spawn(
+                     handle,
+                     cmd,
+                     args,
+                     Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: true)
+                   )
+
           ref = command.ref
-          assert_receive {:stdout, %{ref: ^ref}, _ready}, 1_000
+          assert_receive {:stdout, %{ref: ^ref}, _ready}, @conformance_timeout
 
           assert :ok = @adapter.write_stdin(command, "ping")
-          assert_receive {:stdout, %{ref: ^ref}, echoed}, 1_000
+          assert_receive {:stdout, %{ref: ^ref}, echoed}, @conformance_timeout
           assert echoed =~ "ping"
 
           assert :ok = @adapter.close_stdin(command)
-          assert_receive {:exit, %{ref: ^ref}, 0}, 1_000
+          assert_receive {:exit, %{ref: ^ref}, 0}, @conformance_timeout
         end
 
         test "stop_command is total and tears down the local end" do
           {cmd, args} = @fixtures.spawn_stay
           handle = created_handle()
 
-          assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+          assert {:ok, command} =
+                   @adapter.spawn(
+                     handle,
+                     cmd,
+                     args,
+                     Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: true)
+                   )
+
           assert :ok = @adapter.stop_command(command)
           # A second stop of an already-stopped command must still be :ok.
           assert :ok = @adapter.stop_command(command)
@@ -309,9 +367,16 @@ defmodule Managoat.Sandbox.ConformanceCase.Governance do
             {cmd, args} = @fixtures.spawn_stay
             handle = created_handle()
 
-            assert {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+            assert {:ok, command} =
+                     @adapter.spawn(
+                       handle,
+                       cmd,
+                       args,
+                       Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: true)
+                     )
+
             first_ref = command.ref
-            assert_receive {:stdout, %{ref: ^first_ref}, pre_attach}, 1_000
+            assert_receive {:stdout, %{ref: ^first_ref}, pre_attach}, @conformance_timeout
 
             assert {:ok, [session | _]} = @adapter.list_sessions(handle)
 
@@ -334,17 +399,17 @@ defmodule Managoat.Sandbox.ConformanceCase.Governance do
                 end
               end)
 
-            assert_receive {:replayed, replayed}, 1_000
+            assert_receive {:replayed, replayed}, @conformance_timeout
             assert replayed == pre_attach
 
             # New output reaches both the original owner and the attacher.
             assert :ok = @adapter.write_stdin(command, "after-attach")
-            assert_receive {:stdout, %{ref: ^first_ref}, _}, 1_000
-            assert_receive {:tailed, tailed}, 1_000
+            assert_receive {:stdout, %{ref: ^first_ref}, _}, @conformance_timeout
+            assert_receive {:tailed, tailed}, @conformance_timeout
             assert tailed =~ "after-attach"
 
             ref = Process.monitor(attacher)
-            assert_receive {:DOWN, ^ref, :process, _, _}, 1_000
+            assert_receive {:DOWN, ^ref, :process, _, _}, @conformance_timeout
           end
         end
       end
@@ -354,13 +419,30 @@ defmodule Managoat.Sandbox.ConformanceCase.Governance do
           handle = created_handle()
           on_exit(fn -> @adapter.destroy(handle) end)
           {cmd, args} = @fixtures.spawn_stay
-          {:ok, command} = @adapter.spawn(handle, cmd, args, owner: self(), stdin: true)
+
+          {:ok, command} =
+            @adapter.spawn(
+              handle,
+              cmd,
+              args,
+              Keyword.merge(@conformance_spawn_opts, owner: self(), stdin: true)
+            )
+
           ref = command.ref
-          assert_receive {:stdout, %{ref: ^ref}, _ready}, 1_000
+          assert_receive {:stdout, %{ref: ^ref}, _ready}, @conformance_timeout
           {:ok, [session]} = @adapter.list_sessions(handle)
           assert :ok = @adapter.stop_command(command)
-          assert :ok = @adapter.terminate_session(handle, session.id, timeout_ms: 1_000)
-          assert :ok = @adapter.terminate_session(handle, session.id, timeout_ms: 1_000)
+
+          assert :ok =
+                   @adapter.terminate_session(handle, session.id,
+                     timeout_ms: @conformance_timeout
+                   )
+
+          assert :ok =
+                   @adapter.terminate_session(handle, session.id,
+                     timeout_ms: @conformance_timeout
+                   )
+
           assert {:ok, %{status: _}} = @adapter.get(handle)
           {exec, arguments, expected} = @fixtures.exec_ok
           assert {:ok, output, 0} = @adapter.exec(handle, exec, arguments, [])

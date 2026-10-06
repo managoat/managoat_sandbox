@@ -1,0 +1,92 @@
+name: Live providers
+
+# The adapters against real provider accounts: test/live/, which `mix test`
+# excludes. ci.yml proves what an adapter sends against stubs; this proves what
+# the provider does with it, which a stub cannot know (managoat/fountain#2574:
+# E2B 404s stdin by tag after a pause and resume, and every stubbed test
+# passed).
+#
+# Scheduled and dispatched only, never on pull_request: it spends the
+# account's money and its key must not reach a fork's code. Sandboxes it
+# creates carry the `msb-live-` name prefix; the suite destroys its own, and
+# the last step destroys any a killed run left behind.
+
+on:
+  schedule:
+    - cron: '17 6 * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: live-providers
+  cancel-in-progress: false
+
+env:
+  MIX_ENV: test
+
+jobs:
+  e2b:
+    name: e2b
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
+      # The template Fountain's production names, so a template that stopped
+      # booting or lost the `sprite` user fails here too.
+      E2B_TEMPLATE: ${{ vars.E2B_TEMPLATE || 'fountain' }}
+
+    steps:
+      - name: Require the E2B key
+        run: |
+          if [ -z "${E2B_API_KEY}" ]; then
+            echo "::error::E2B_API_KEY is not configured for this repository."
+            exit 1
+          fi
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v5
+        with:
+          persist-credentials: false
+
+      - name: Set up Elixir
+        id: beam
+        uses: erlef/setup-beam@54075bcc5e249e4758d363f27d099f55d843f124 # v1.24.1
+        with:
+          elixir-version: "1.19.2"
+          otp-version: "28.3"
+
+      - name: Restore deps cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: deps
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Restore build cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v5
+        with:
+          path: _build
+          key: ${{ runner.os }}-build-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-build-${{ steps.beam.outputs.otp-version }}-${{ steps.beam.outputs.elixir-version }}-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Live E2B suite
+        timeout-minutes: 12
+        run: mix test --only live test/live/e2b_live_test.exs
+
+      - name: Destroy leftover live sandboxes
+        if: always()
+        timeout-minutes: 2
+        run: |
+          curl -fsS -H "x-api-key: ${E2B_API_KEY}" \
+            "https://api.e2b.app/v2/sandboxes?state=running,paused&limit=100" |
+            jq -r '.[] | select((.metadata.fountain_name // "") | startswith("msb-live-")) | .sandboxID' |
+            while read -r id; do
+              echo "destroying ${id}"
+              curl -fsS -X DELETE -H "x-api-key: ${E2B_API_KEY}" "https://api.e2b.app/sandboxes/${id}" || true
+            done
