@@ -139,9 +139,11 @@ defmodule Managoat.Sandbox.SpritesLiveTest do
   end
 
   describe "Sprites live: going cold" do
-    # Sprites scale to zero on their own after about 30 s without activity;
-    # `suspend/1` is a no-op on purpose. The next exec wakes the sprite, and the
-    # disk has to be there when it does.
+    # Sprites stop on their own after about 30 s without activity; `suspend/1`
+    # is a no-op on purpose. A stopped sprite reports `warm` and later, on the
+    # provider's own schedule, `cold` (one stayed `warm` for 5 minutes on
+    # 2026-10-06), so the test waits for either. The next exec wakes it, and
+    # the disk has to be there when it does.
     test "a sprite left idle wakes on the next exec with its disk intact" do
       handle = ready_handle()
       assert :ok = Sprites.write_file(handle, "/home/sprite/before-idle", "kept\n", [])
@@ -171,10 +173,10 @@ defmodule Managoat.Sandbox.SpritesLiveTest do
       raw["status"]
     end)
     |> Enum.find(fn status ->
-      status not in ["running", "warm"] or System.monotonic_time(:millisecond) > deadline
+      status != "running" or System.monotonic_time(:millisecond) > deadline
     end)
     |> tap(fn status ->
-      assert status not in ["running", "warm"], "sprite never went idle in #{budget_ms} ms"
+      assert status != "running", "sprite never stopped in #{budget_ms} ms"
     end)
   end
 
