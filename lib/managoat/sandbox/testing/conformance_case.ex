@@ -125,12 +125,14 @@ defmodule Managoat.Sandbox.ConformanceCase.Identity do
               :suspend,
               :network_policy,
               :checkpoint,
+              :create_checkpoint_once,
               :attach,
               :tty,
               :public_url,
               :terminate_session,
               :force_terminate_session,
-              :create_new
+              :create_new,
+              :destroy_once
             ])
 
           assert MapSet.subset?(caps, known)
@@ -435,12 +437,12 @@ defmodule Managoat.Sandbox.ConformanceCase.Governance do
 
           assert :ok =
                    @adapter.terminate_session(handle, session.id,
-                     timeout_ms: @conformance_timeout
+                     timeout_ms: min(@conformance_timeout, 30_000)
                    )
 
           assert :ok =
                    @adapter.terminate_session(handle, session.id,
-                     timeout_ms: @conformance_timeout
+                     timeout_ms: min(@conformance_timeout, 30_000)
                    )
 
           assert {:ok, %{status: _}} = @adapter.get(handle)
