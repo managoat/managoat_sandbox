@@ -104,8 +104,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 25
     env:
-      # A token scoped to the `msb-live-` name prefix, not the organization's
-      # production token: an unscoped one can exec into every sprite.
+      # Sprites tokens cannot be scoped to a name prefix, so this is an
+      # organization token for production's org (Infisical `fountain`,
+      # SPRITES_LIVE_TEST_TOKEN): it can reach every sprite there, users'
+      # included. The suite only ever names `msb-live-` sprites, and only
+      # main's schedule and dispatch run this job. The org caps running
+      # sprites at 20; the suite's go cold within about 30 s of their test.
       SPRITES_TOKEN: ${{ secrets.SPRITES_TOKEN }}
 
     steps:

@@ -26,8 +26,8 @@ the package ships without a bump fails the release gate.
   against a real organization, plus a fresh sprite's first exec (#2491), a cold
   wake keeping the disk, the public URL serving without a token, checkpoint
   restore, `write_file`, exec timeouts and the egress allowlist. `live.yml`
-  gains a `sprites` job (secret `SPRITES_TOKEN`, scoped to the `msb-live-`
-  prefix) and re-runs a failed live test once before failing.
+  gains a `sprites` job (secret `SPRITES_TOKEN`, an organization token;
+  Sprites tokens cannot be scoped to a name prefix) and re-runs a failed live test once before failing.
 
 ## [0.5.3] - 2026-10-06
 

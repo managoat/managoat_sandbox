@@ -6,9 +6,9 @@ defmodule Managoat.Sandbox.SpritesLiveTest do
   #
   # It creates real, billed sprites. Every one carries this run's name prefix,
   # `msb-live-`, and is destroyed in `on_exit` whether its test passed or not;
-  # the sweep at the end destroys anything else under the prefix. A token
-  # scoped to that prefix is enough, and is the one CI should hold: a token
-  # for the whole organization can exec into every sprite in it.
+  # the sweep at the end destroys anything else under the prefix. Sprites
+  # tokens cannot be scoped to a prefix, so the token reaches every sprite in
+  # its organization; nothing here touches a name outside the prefix.
   #
   # The stubbed suites (sprites_test.exs, sprites/*_test.exs) pin what the
   # adapter sends and how it reads the SDK's answers. This one pins what
