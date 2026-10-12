@@ -158,6 +158,7 @@ defmodule Managoat.Sandbox.ExecCollectionDeadlineTest do
       {:ok, %{"sandboxID" => "sbx1", "state" => "running"}}
     end)
 
+    stub(Api, :get_sandbox, fn "sbx1" -> {:ok, %{}} end)
     stub(CommandServer, :start, fn _ -> flunk("must not dispatch") end)
 
     assert {:error, {:unavailable, {:exec_timeout, 1}}} =
@@ -179,6 +180,8 @@ defmodule Managoat.Sandbox.ExecCollectionDeadlineTest do
     stub(Api, :find_by_name, fn "deadline-test" ->
       {:ok, %{"sandboxID" => "sbx1", "state" => "running"}}
     end)
+
+    stub(Api, :get_sandbox, fn "sbx1" -> {:ok, %{}} end)
 
     stub(CommandServer, :start, fn opts ->
       pid = start.(opts[:owner], opts[:ref])

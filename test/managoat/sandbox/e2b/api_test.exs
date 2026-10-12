@@ -58,8 +58,12 @@ defmodule Managoat.Sandbox.E2B.ApiTest do
 
     assert_received {:request, "POST", "/sandboxes", _, create_body}
 
-    assert %{"templateID" => "fountain-template", "autoPause" => true, "timeout" => 1_800} =
-             Jason.decode!(create_body)
+    assert %{
+             "templateID" => "fountain-template",
+             "autoPause" => true,
+             "secure" => true,
+             "timeout" => 1_800
+           } = Jason.decode!(create_body)
 
     assert_received {:request, "GET", "/v2/sandboxes", find_query, _}
     assert find_query =~ "state=running%2Cpaused"
@@ -71,6 +75,25 @@ defmodule Managoat.Sandbox.E2B.ApiTest do
              "allowOut" => ["hex.pm", "github.com"],
              "denyOut" => ["0.0.0.0/0"]
            }
+  end
+
+  test "get_sandbox returns the detail, and keeps failures tagged" do
+    Req.Test.stub(__MODULE__, fn conn ->
+      case conn.request_path do
+        "/sandboxes/sbx-1" ->
+          Req.Test.json(conn, %{"sandboxID" => "sbx-1", "envdAccessToken" => "tok"})
+
+        "/sandboxes/sbx-gone" ->
+          conn |> Plug.Conn.put_status(404) |> Req.Test.json(%{"message" => "not found"})
+
+        "/sandboxes/sbx-down" ->
+          Req.Test.transport_error(conn, :econnrefused)
+      end
+    end)
+
+    assert {:ok, %{"envdAccessToken" => "tok"}} = Api.get_sandbox("sbx-1")
+    assert {:error, {:api_error, 404, %{"message" => "not found"}}} = Api.get_sandbox("sbx-gone")
+    assert {:error, %Req.TransportError{reason: :econnrefused}} = Api.get_sandbox("sbx-down")
   end
 
   test "find returns nil for an empty result" do

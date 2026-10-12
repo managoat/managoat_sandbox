@@ -20,27 +20,50 @@ defmodule Managoat.Sandbox.E2B.Envd do
 
   @port 49_983
 
+  defmodule Target do
+    @moduledoc """
+    A sandbox as envd is reached: its id and, when the sandbox was created
+    `secure`, envd's access token. Inspect shows only the id, so a token in a
+    process's state never reaches a crash report.
+    """
+    @derive {Inspect, only: [:id]}
+    @enforce_keys [:id]
+    defstruct [:id, :token]
+
+    @type t :: %__MODULE__{id: String.t(), token: String.t() | nil}
+  end
+
+  @typedoc "A sandbox id, or a `Target` carrying envd's access token."
+  @type target :: String.t() | Target.t()
+
+  @doc "The sandbox id of a target."
+  @spec id_of(target()) :: String.t()
+  def id_of(%Target{id: id}), do: id
+  def id_of(id) when is_binary(id), do: id
+
   # The in-guest user envd runs commands as (and reads/writes files as) —
   # selected per request via Basic auth. The fountain template creates
   # `sprite` (the layout the provisioning pipeline assumes); the stock E2B
   # base template uses `user`.
   defp user, do: Managoat.Sandbox.Config.get(Managoat.Sandbox.E2B, :user, "sprite")
 
-  def host(sandbox_id) do
+  def host(target) do
+    sandbox_id = id_of(target)
     base = Managoat.Sandbox.E2B.Api.base_url()
     %URI{host: api_host, scheme: scheme} = URI.parse(base)
     domain = String.replace_prefix(api_host, "api.", "")
     "#{scheme}://#{@port}-#{sandbox_id}.#{domain}"
   end
 
-  def req(sandbox_id) do
+  def req(target) do
     Req.new(
       [
-        base_url: host(sandbox_id),
-        headers: [
-          {"authorization", "Basic " <> Base.encode64("#{user()}:")},
-          {"keepalive-ping-interval", "50"}
-        ],
+        base_url: host(target),
+        headers:
+          [
+            {"authorization", "Basic " <> Base.encode64("#{user()}:")},
+            {"keepalive-ping-interval", "50"}
+          ] ++ access_token(target),
         receive_timeout: Managoat.Sandbox.Config.get(Managoat.Sandbox.E2B, :timeout_ms, 30_000)
       ] ++ Managoat.Sandbox.Config.get(Managoat.Sandbox.E2B, :req_options, [])
     )
@@ -58,6 +81,13 @@ defmodule Managoat.Sandbox.E2B.Envd do
       "application/connect+json"
     )
   end
+
+  # A secure sandbox's envd refuses a request without its token (hosted E2B
+  # answers 401, as does loam, where every sandbox is secure).
+  defp access_token(%Target{token: token}) when is_binary(token) and token != "",
+    do: [{"x-access-token", token}]
+
+  defp access_token(_target), do: []
 
   # ── unary process calls ────────────────────────────────────────────────────
 

@@ -52,6 +52,10 @@ defmodule Managoat.Sandbox.E2B.Api do
       templateID: template(),
       timeout: @initial_ttl_s,
       autoPause: true,
+      # envd then takes requests only with the sandbox's access token, which
+      # `get_sandbox/1` hands back; without it anyone who learns the id can
+      # drive the sandbox. Some servers (loam) only make secure sandboxes.
+      secure: true,
       metadata: %{fountain_name: name, fountain: "1"}
     }
 
@@ -96,6 +100,18 @@ defmodule Managoat.Sandbox.E2B.Api do
       {:ok, %{status: status}} when status in 200..299 -> :ok
       # Already paused reads as success; pausing is idempotent intent.
       {:ok, %{status: 409}} -> :ok
+      {:ok, %{status: status, body: body}} -> {:error, {:api_error, status, body}}
+      {:error, reason} -> {:error, reason}
+    end
+  end
+
+  @doc """
+  The sandbox's detail, `GET /sandboxes/{id}`: for a running secure sandbox
+  it carries `envdAccessToken`. Returns the raw body.
+  """
+  def get_sandbox(id) do
+    case Req.get(req(), url: "/sandboxes/#{id}") do
+      {:ok, %{status: status, body: body}} when status in 200..299 and is_map(body) -> {:ok, body}
       {:ok, %{status: status, body: body}} -> {:error, {:api_error, status, body}}
       {:error, reason} -> {:error, reason}
     end
