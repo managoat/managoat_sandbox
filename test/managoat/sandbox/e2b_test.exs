@@ -4,9 +4,11 @@ defmodule Managoat.Sandbox.E2BTest do
   # global app env and uses shared Req.Test ownership (the CommandServer is
   # its own process), so not async.
   use ExUnit.Case, async: false
+  use Mimic
 
   alias Managoat.Sandbox.Command
   alias Managoat.Sandbox.E2B, as: Adapter
+  alias Managoat.Sandbox.E2B.Api
   alias Managoat.Sandbox.E2B.Envd
   alias Managoat.Sandbox.NetworkPolicy
 
@@ -32,6 +34,12 @@ defmodule Managoat.Sandbox.E2BTest do
     )
 
     on_exit(fn -> Application.put_env(:managoat_sandbox, Managoat.Sandbox.E2B, previous) end)
+
+    # A sandbox's detail is where envd's access token comes from. Most tests
+    # here are about something else, so by default the sandbox is one created
+    # without `secure` (no token), as hosted E2B's were before 0.5.5; the
+    # access-token tests below say otherwise.
+    stub(Api, :get_sandbox, fn _id -> {:ok, %{}} end)
     :ok
   end
 
@@ -622,6 +630,60 @@ defmodule Managoat.Sandbox.E2BTest do
 
       assert {:error, {:unavailable, {:http, 503, %{"error" => "down"}}}} =
                Adapter.list_sessions(handle())
+    end
+  end
+
+  describe "envd access token" do
+    test "a secure sandbox's envd calls carry its token, and only to its envd" do
+      test_pid = self()
+      stub(Api, :get_sandbox, fn "sbx1" -> {:ok, %{"envdAccessToken" => "envd-secret"}} end)
+
+      body = stream_body([%{"event" => %{"end" => %{"exitCode" => 0}}}])
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(
+          test_pid,
+          {:token, conn.method, conn.request_path,
+           Plug.Conn.get_req_header(conn, "x-access-token")}
+        )
+
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/files"} -> Plug.Conn.send_resp(conn, 200, "[]")
+          {"POST", "/process.Process/Start"} -> Plug.Conn.resp(conn, 200, body)
+          {"PUT", "/sandboxes/sbx1/network"} -> Plug.Conn.send_resp(conn, 204, "")
+        end
+      end)
+
+      assert :ok = Adapter.write_file(handle(), "/tmp/x", "data", [])
+      assert {:ok, "", 0} = Adapter.exec(handle(), "true", [], [])
+      assert :ok = Adapter.apply_network_policy(handle(), %NetworkPolicy{allow: ["hex.pm"]})
+
+      assert_received {:token, "POST", "/files", ["envd-secret"]}
+      assert_received {:token, "POST", "/process.Process/Start", ["envd-secret"]}
+      # The control plane is authenticated by the API key, never the envd token.
+      assert_received {:token, "GET", "/v2/sandboxes", []}
+      assert_received {:token, "PUT", "/sandboxes/sbx1/network", []}
+    end
+
+    test "a sandbox whose detail can't be read is reached by its bare id" do
+      test_pid = self()
+      stub(Api, :get_sandbox, fn _id -> {:error, {:api_error, 500, %{}}} end)
+
+      Req.Test.stub(__MODULE__, fn conn ->
+        send(
+          test_pid,
+          {:token, conn.request_path, Plug.Conn.get_req_header(conn, "x-access-token")}
+        )
+
+        case {conn.method, conn.request_path} do
+          {"GET", "/v2/sandboxes"} -> Req.Test.json(conn, [listed("running")])
+          {"POST", "/files"} -> Plug.Conn.send_resp(conn, 200, "[]")
+        end
+      end)
+
+      assert :ok = Adapter.write_file(handle(), "/tmp/x", "data", [])
+      assert_received {:token, "/files", []}
     end
   end
 

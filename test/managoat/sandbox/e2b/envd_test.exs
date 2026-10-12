@@ -162,6 +162,21 @@ defmodule Managoat.Sandbox.E2B.EnvdTest do
     end
   end
 
+  describe "Target" do
+    test "carries envd's token as a header, and inspect shows only the id" do
+      target = %Envd.Target{id: "sbx-1", token: "envd-secret"}
+
+      assert Envd.id_of(target) == "sbx-1"
+      assert Envd.id_of("sbx-1") == "sbx-1"
+      assert Envd.host(target) == Envd.host("sbx-1")
+      assert Req.Request.get_header(Envd.req(target), "x-access-token") == ["envd-secret"]
+      assert Req.Request.get_header(Envd.req("sbx-1"), "x-access-token") == []
+      assert Req.Request.get_header(Envd.req(%Envd.Target{id: "sbx-1"}), "x-access-token") == []
+      refute inspect(target) =~ "envd-secret"
+      assert inspect(target) =~ "sbx-1"
+    end
+  end
+
   describe "host/1" do
     test "derives the envd host from the control-plane domain" do
       assert Envd.host("sbx123") == "https://49983-sbx123.test"

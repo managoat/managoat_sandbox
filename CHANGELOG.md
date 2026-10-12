@@ -10,6 +10,17 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.5] - 2026-10-12
+
+- E2B: sandboxes are created `secure`, and every envd call carries the
+  sandbox's access token (`X-Access-Token`), read from
+  `GET /sandboxes/{id}` when the adapter resolves the sandbox. Until now a
+  Fountain sandbox's envd took requests from anyone who knew its id, and an
+  E2B-compatible server that only makes secure sandboxes (loam) answered
+  every envd call 401. A sandbox created before this release has no token
+  and is reached as before. `Envd.Target` carries the token; its `inspect`
+  shows only the id.
+
 ## [0.5.4] - 2026-10-06
 
 - Sprites: `create_checkpoint/2` and `restore_checkpoint/2` answer

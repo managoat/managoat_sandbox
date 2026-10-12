@@ -378,7 +378,7 @@ defmodule Managoat.Sandbox.E2B do
   @impl true
   def apply_network_policy(%Handle{} = handle, %NetworkPolicy{allow: allow}) do
     with {:ok, id} <- resolve_running(handle.name) do
-      Api.set_network(id, allow) |> normalize_ok()
+      id |> Envd.id_of() |> Api.set_network(allow) |> normalize_ok()
     end
   end
 
@@ -390,10 +390,29 @@ defmodule Managoat.Sandbox.E2B do
 
   # ── internals ──────────────────────────────────────────────────────────────
 
-  # Resolve the sandbox id, resuming a paused sandbox on the way: E2B's TTL
-  # auto-pause can park a sandbox under a `ready` row, and self-healing here
-  # beats surfacing an unreachable-envd error for a disk that is fine.
+  # Resolve the sandbox to an envd target, resuming a paused sandbox on the
+  # way: E2B's TTL auto-pause can park a sandbox under a `ready` row, and
+  # self-healing here beats surfacing an unreachable-envd error for a disk
+  # that is fine.
   defp resolve_running(name) do
+    with {:ok, id} <- resolve_running_id(name), do: {:ok, target(id)}
+  end
+
+  # envd's access token comes only with the sandbox's detail (a listing
+  # leaves it out). A sandbox created without `secure` has none, and its
+  # target is the bare id; so is one whose detail can't be read, whose envd
+  # calls then fail on their own terms.
+  defp target(id) do
+    case Api.get_sandbox(id) do
+      {:ok, %{"envdAccessToken" => token}} when is_binary(token) and token != "" ->
+        %Envd.Target{id: id, token: token}
+
+      _other ->
+        id
+    end
+  end
+
+  defp resolve_running_id(name) do
     case Api.find_by_name(name) do
       {:ok, nil} ->
         {:error, :not_found}

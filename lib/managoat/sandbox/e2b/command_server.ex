@@ -176,7 +176,7 @@ defmodule Managoat.Sandbox.E2B.CommandServer do
   end
 
   def handle_info(:heartbeat, state) do
-    case Api.set_timeout(state.sandbox_id) do
+    case Api.set_timeout(Envd.id_of(state.sandbox_id)) do
       :ok -> :ok
       {:error, reason} -> Logger.warning("e2b: TTL heartbeat failed: #{inspect(reason)}")
     end
