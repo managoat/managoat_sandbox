@@ -10,6 +10,18 @@ the package ships without a bump fails the release gate.
 
 ## [Unreleased]
 
+## [0.5.6] - 2026-10-15
+
+- Sprites: `terminate_session/3` treats HTTP 410 from the kill endpoint as a
+  session that is already gone, as it treats 404: a graceful stop answers
+  `:ok`, a force stop still answers
+  `{:error, {:unavailable, :termination_unconfirmed}}`. Since 2026-10-07
+  Sprites answers 410 "session already exited" to a kill of a session whose
+  process has exited, where it answered 404. Until now the adapter returned
+  `{:error, {:invalid, {:http, 410, %{}}}}`, so a repeated graceful stop,
+  which the contract says is idempotent, failed, and the daily live suite
+  failed with it.
+
 ## [0.5.5] - 2026-10-12
 
 - E2B: sandboxes are created `secure`, and every envd call carries the
