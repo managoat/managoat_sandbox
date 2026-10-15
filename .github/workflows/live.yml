@@ -38,8 +38,12 @@ jobs:
     timeout-minutes: 20
     env:
       E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
-      # The template Fountain's production names, so a template that stopped
-      # booting or lost the `sprite` user fails here too.
+      # The endpoint and template Fountain's production uses, so a template
+      # that stopped booting or lost the `sprite` user fails here too. The
+      # repository variables point at loam's E2B-compatible API
+      # (https://api.e2b.loam.inevitable.fyi), and E2B_API_KEY is a key of
+      # loam's `fountain-ci` project; without them this is hosted E2B.
+      E2B_BASE_URL: ${{ vars.E2B_BASE_URL || 'https://api.e2b.app' }}
       E2B_TEMPLATE: ${{ vars.E2B_TEMPLATE || 'fountain' }}
 
     steps:
@@ -92,11 +96,11 @@ jobs:
         timeout-minutes: 2
         run: |
           curl -fsS -H "x-api-key: ${E2B_API_KEY}" \
-            "https://api.e2b.app/v2/sandboxes?state=running,paused&limit=100" |
+            "${E2B_BASE_URL}/v2/sandboxes?state=running,paused&limit=100" |
             jq -r '.[] | select((.metadata.fountain_name // "") | startswith("msb-live-")) | .sandboxID' |
             while read -r id; do
               echo "destroying ${id}"
-              curl -fsS -X DELETE -H "x-api-key: ${E2B_API_KEY}" "https://api.e2b.app/sandboxes/${id}" || true
+              curl -fsS -X DELETE -H "x-api-key: ${E2B_API_KEY}" "${E2B_BASE_URL}/sandboxes/${id}" || true
             done
 
   sprites:
