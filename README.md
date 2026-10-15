@@ -119,6 +119,8 @@ Sprites and the reference fake. Other adapters return `{:error, :not_supported}`
 they do not destroy the sandbox as a fallback. The grace interval is 1–30,000 ms,
 with up to five further seconds for transport. Graceful mode requests SIGTERM
 and requires affirmative session termination plus the final completion frame.
+A session Sprites no longer has (HTTP 404) or whose process already exited
+(HTTP 410, the answer to a second kill) confirms a graceful stop.
 An error, malformed/truncated stream or lost response remains uncertain. There
 is no automatic retry or redirect, and output is bounded to 16 KiB.
 
@@ -127,7 +129,7 @@ The adapter must advertise `:force_terminate_session`; older adapters that only
 support graceful termination return `:not_supported` before any stop request.
 Use it when a graceful parent exit could leave a TERM-resistant child running.
 It requires a SIGKILL signal event and affirmative terminal completion; unlike
-graceful mode, a 404 remains uncertain because session disappearance does not
+graceful mode, a 404 or 410 remains uncertain because session disappearance does not
 prove its descendants stopped. The timeout is a wait allowance, with the same
 transport grace. This does not cover descendants that create another process
 group, lost-start recovery, or a complete read/lifecycle exclusion protocol.
