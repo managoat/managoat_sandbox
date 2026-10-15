@@ -1,5 +1,13 @@
 # Managoat.Sandbox
 
+> **Archived 2026-10-15.** This library has been folded back into
+> [Fountain](https://github.com/managoat/fountain), its only maintained consumer,
+> at [`apps/fountain/lib/managoat/sandbox`](https://github.com/managoat/fountain/tree/main/apps/fountain/lib/managoat/sandbox)
+> ([managoat/fountain#2737](https://github.com/managoat/fountain/pull/2737)).
+> Every release on Hex is retired; they stay installable, but there will be no
+> further releases.
+
+
 One behaviour for the machine an agent runs in, three adapters that implement
 it against hosted providers, and the conformance suite a fourth adapter runs
 against.
